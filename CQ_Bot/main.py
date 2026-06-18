@@ -38,7 +38,7 @@ async def load_extensions():
 @bot.event
 async def on_ready():
     logger.info("Logged in as: %s (%s)", bot.user.name, bot.user.id)
-    logger.info("CQ Stats Bot online (registration + stats + OCR ingestion). [autodeploy test 2026-06-19]")
+    logger.info("CQ Stats Bot online (registration + stats + OCR ingestion).")
     
     # Sync Slash Commands (Phase 4)
     try:
