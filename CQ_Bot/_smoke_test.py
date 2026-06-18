@@ -9,7 +9,9 @@ class FakeTable:
         self.rows = []
         self._c = 0
         self._updates = 0
-    def all(self, formula=None, max_records=None):
+    def all(self, formula=None, max_records=None, fields=None):
+        # `fields=` is accepted (real pyairtable projects the payload) but ignored
+        # here - the fake stores whole rows. Matching logic is field-name driven.
         rows = self.rows
         if formula:
             if "{Player} = ''" in formula or "{Player}=''" in formula:
@@ -130,6 +132,44 @@ HP.rows.append({"id": "recHP_unmatched_exist", "fields": {"IGN as read": "ZZZRan
 main.reconcile_once(formula="{Player} = ''")
 assert HP._updates == 0, "B1 Test Failed: identical status update was NOT skipped!"
 print("B1 Test (Skip identical status update) OK")
+
+# ---- TTL-gated matcher reload test ----
+# reload_matcher_if_stale() and _matcher_reload_cache live in core; reach them
+# via the core module (underscore names are NOT pulled in by `from core import *`).
+import core as _core
+import time as _time
+
+# Force a clean baseline: reset the cache timestamp so the next call is treated as stale.
+_core._matcher_reload_cache["t"] = 0.0
+_core.MATCHER_RELOAD_TTL = 300  # 5 min, matches default
+
+# 1) First call after reset -> should reload, return True
+reloaded1 = _core.reload_matcher_if_stale()
+assert reloaded1 is True, "TTL Test Failed: first call should reload (return True)"
+# Roster should be populated (2 players seeded)
+assert sorted(_core.matcher.roster) == ["F10W3R", "Phoenix"], _core.matcher.roster
+
+# 2) Immediate second call -> cache fresh, should skip, return False
+reloaded2 = _core.reload_matcher_if_stale()
+assert reloaded2 is False, "TTL Test Failed: second call within TTL should skip (return False)"
+
+# 3) force=True -> bypass TTL, must reload, return True
+reloaded3 = _core.reload_matcher_if_stale(force=True)
+assert reloaded3 is True, "TTL Test Failed: force=True should always reload (return True)"
+
+# 4) TTL expiry -> simulate by backdating the cache timestamp
+_core._matcher_reload_cache["t"] = _time.time() - 301  # older than TTL
+reloaded4 = _core.reload_matcher_if_stale()
+assert reloaded4 is True, "TTL Test Failed: stale cache (>TTL) should reload (return True)"
+print("TTL-gated reload test OK")
+
+# ---- Field projection in matcher.reload() ----
+# reload() now calls .all(fields=[...]). The fake ignores fields= but we verify
+# reload still populates correctly (logic unchanged, only payload trimmed).
+main.matcher.reload()
+assert "F10W3R" in main.matcher.roster and "Phoenix" in main.matcher.roster
+assert main.matcher.match("F1OW3R")[2] in ("fuzzy_auto", "review")  # OCR corruption still fuzzy-matches
+print("Field projection in reload() OK")
 
 # ---- B2 Test: Duplicate IGN checks ----
 assert main.check_duplicate_ign("F10W3R") == True, "B2 Test Failed: F10W3R should be duplicate"

@@ -94,7 +94,7 @@ Staff: /syncroles /review /link /unlink /reject /seasonreport /weeklyreport /app
 
 - Airtable formula strings: always brace field names `{Player}`. Numeric-only interpolation is injection-safe; quote-strip user input otherwise.
 - `tree.sync()` runs on every on_ready (reconnects) — known minor issue, fix = once-flag.
-- reconcile loop reloads matcher every 45s (full Players+Aliases scan) — heavier than needed; candidate: 5-min interval.
+- reconcile loop reloads matcher every 45s (full Players+Aliases scan) — **2026-06-19 fixed**: reload is now TTL-gated via `core.reload_matcher_if_stale()` (5-min default, `MATCHER_RELOAD_TTL` env). reconcile_once still runs every 45s (cheap, B1 guard = 0 writes). reload() and reconcile_once() both use `fields=` projection. Eager-reload sites (/ign, /changeign, /link via relink_records) bypass the TTL. Airtable Api has `timeout=(5,30)` + urllib3 Retry(429/5xx).
 - discord.py pitfalls hit before: AutoModPresets API rename, onboarding prompts need `id`s, welcome-screen desc ≤50 chars.
 - DPK leaderboard = ascending sort + zero-filter (lower is better). Don't "fix" it to descending.
 - `/stats` career section uses rollups; Advanced section reads formula fields — both from the single Players record fetch.
@@ -109,7 +109,7 @@ Staff: /syncroles /review /link /unlink /reject /seasonreport /weeklyreport /app
   **NeatQueue auth = RAW token in Authorization header, NO "Bearer"** (verified live).
   `MMR_MODIFIER_DRYRUN=1` default — flip to 0 after reviewing one weekend of staff-log reports.
   State persisted in `mmr_state.json` on host. NeatQueue base MMR change is NOT flat ±25
-  (observed ±31.7 — variance/multipliers on). /applymodifiers = manual trigger (13 slash cmds now).
+  (observed ±31.7 — variance/multipliers on). /applymodifiers = manual trigger (15 slash cmds total).
 - MMR soft reset at season end ((old+1000)/2) — now unblocked; build on nq_history + add/stats
   (read each player's MMR from /api/v1/playerstats, apply delta via add/stats).
 - Players "Dashboard" grid view in Airtable — manual, cosmetic, may not exist yet.

@@ -49,13 +49,19 @@ class Matcher:
         self.reload()
 
     def reload(self):
-        """Load the whole master into memory. Call on boot + on new registration."""
+        """Load the whole master into memory. Call on boot + on new registration.
+
+        Field projection (fields=) trims the payload to only what matching needs.
+        The Players table carries ~19 rollup/formula fields per row that matching
+        never reads; projecting to just "Primary IGN" cuts that payload ~95%.
+        The Aliases table is thin, but we still skip the unused "Source" field.
+        """
         self.exact.clear()
         self.candidates.clear()
         self.roster.clear()
 
-        # 1) Players' Primary IGN
-        for p in self.players_table.all():
+        # 1) Players' Primary IGN (only this one field is read)
+        for p in self.players_table.all(fields=["Primary IGN"]):
             pid = p["id"]
             ign = p["fields"].get("Primary IGN")
             if ign:
@@ -66,7 +72,7 @@ class Matcher:
                     self.candidates.append((n, pid))
 
         # 2) All Aliases variants (incl. OCR-confirmed corruptions)
-        for a in self.aliases_table.all():
+        for a in self.aliases_table.all(fields=["IGN", "Player"]):
             ign = a["fields"].get("IGN")
             players = a["fields"].get("Player") or []
             if ign and players:

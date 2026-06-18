@@ -1,6 +1,6 @@
-# NeatQueue 설정 — 랜덤 팀 / 맵 선택 / 오퍼레이터 스킬 픽
+# NeatQueue 설정 — 랜덤 팀 / 맵 선택
 
-> 2026-06-12. 근거: CODM_2026_Esports_Settings.md + NeatQueue 공식 문서.
+> 2026-06-12 (2026-06-19 갱신). 근거: CODM_2026_Esports_Settings.md + NeatQueue 공식 문서.
 > 모든 명령은 큐 채널에서 실행. 적용 후 `/simulate`로 검증 권장.
 
 ---
@@ -46,39 +46,21 @@
 - 빠른 진행이 우선이면 `/map voting`
 - `/map selection` 으로 선택 모드 세부 조정
 
-## 3. 오퍼레이터 스킬 픽 (팀 내 중복 금지)
+## 3. 오퍼레이터 스킬 픽 — ~~NeatQueue Heroes~~ **폐기됨 (2026-06)**
 
-NeatQueue의 **Heroes** 기능 사용 — 허용 오퍼레이터 스킬 10종을 "hero"로 등록.
-
-```
-/hero add hero_name: Annihilator
-/hero add hero_name: Claw
-/hero add hero_name: Death Machine
-/hero add hero_name: Equalizer
-/hero add hero_name: Gravity Spikes
-/hero add hero_name: Gravity Vortex Gun
-/hero add hero_name: Purifier
-/hero add hero_name: Sparrow
-/hero add hero_name: Tempest
-/hero add hero_name: War Machine
-```
-
-활성화:
-
-```
-/hero voting    → 팀 생성 후 각 플레이어가 스킬 선택
-```
-
-- 규정 근거: 같은 팀 두 명이 동일 오퍼레이터 스킬 장착 금지 (위반 시 해당 맵 몰수패)
-- 10종 = 2026 허용 목록 전체. 향후 금지/허용 변경 시 `/hero add`/`/hero remove`로 갱신
-- ⚠️ 팀 내 중복 차단이 강제되는지는 `/simulate`로 1회 확인할 것. 강제가 안 되면 픽 현황 공개용으로 쓰고 중복 금지는 규정(몰수패)으로 운영
+> **이 섹션은 폐기되었습니다.** NeatQueue의 Heroes 기능은 "팀 단위 밴 드래프트" 방식이라
+> "각 플레이어가 개별적으로 오퍼레이터 스킬을 픽/기록"하려는 본래 의도와 맞지 않아 사용하지 않기로 결정됨
+> (근거: champions_queue_status.md §6, §10).
+>
+> 오퍼레이터 스킬 중복 금지 규정은 **규정(위반 시 몰수패)으로만 운영**하고, 봇/큐 자동화는 하지 않음.
+> 과거에 검토했던 `/hero add ...` + `/hero voting` 명령은 **실행하지 마세요.**
 
 ---
 
 ## 적용 후 검증 체크리스트
 
-- [ ] `/info` — teamselection이 Random, maps/heroes 등록 확인
-- [ ] `/simulate` — 가짜 플레이어로 큐 풀가동: 역할 1명씩 분배 + 맵 선택 + 스킬 픽 흐름 확인
+- [ ] `/info` — teamselection이 Random, 맵 풀 등록 확인
+- [ ] `/simulate` — 가짜 플레이어로 큐 풀가동: 역할 1명씩 분배 + 맵 선택 흐름 확인
 - [ ] 실제 첫 매치에서 결과 메시지가 #results에 정상 게시되는지 확인
 
 ---

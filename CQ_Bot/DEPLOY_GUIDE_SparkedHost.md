@@ -2,7 +2,9 @@
 
 초보자용. 위에서부터 순서대로 따라 하면 됩니다. 예상 소요: 20~30분.
 
-올릴 파일 4개 (`CQ_Bot` 폴더 안): `main.py`, `matcher.py`, `ocr_prompt.py`, `requirements.txt`, 그리고 `.env`.
+올릴 파일/폴더 (`CQ_Bot` 폴더 안): `main.py`, `core.py`, `matcher.py`, `ocr_prompt.py`, `requirements.txt`, `cogs/` 폴더 전체(7개 .py), 그리고 `.env`.
+
+> ⚠️ `core.py`와 `cogs/` 폴더는 **반드시** 올려야 합니다. `main.py`가 임포트하므로 빠지면 봇이 켜지지 않습니다.
 
 ---
 
@@ -32,22 +34,33 @@
 ## 3단계 — 파일 업로드
 
 1. 서버 화면에서 **Files(파일 관리자)** 탭 클릭
-2. 다음 5개 파일을 **드래그해서 업로드**:
+2. 다음 파일/폴더를 **드래그해서 업로드**:
    - `main.py`
+   - `core.py`  ← **필수** (main.py가 import)
    - `matcher.py`
    - `ocr_prompt.py`
    - `requirements.txt`
+   - `cogs/` 폴더 전체 (7개 .py: ingest, mmr, registration, season, selfroles, stats, verify)  ← **필수**
    - `.env`  ← 이게 토큰·API 키가 든 파일입니다. 같이 올려야 봇이 키를 읽습니다.
 
-> `.bak` 파일이나 `_smoke_test.py`, `__pycache__` 폴더는 **올리지 마세요.** 불필요합니다.
+> `.bak` 파일이나 `_smoke_test.py`, `__pycache__` 폴더, `bot.log`, `mmr_state.json`은 **올리지 마세요.** 불필요합니다.
 
-`.env` 안에 이 4줄이 들어있는지 확인:
+> `cogs/` 폴더 업로드 시, 폴더째 끌어다 놓거나(패널이 지원하면), 폴더 안의 .py 7개를 `cogs/` 하위 폴더에 넣어야 합니다. 최상위 경로에 .py가 있으면 안 됩니다 — 반드시 `cogs/` 폴더 안에.
+
+`.env` 안에 최소 이 변수들이 들어있는지 확인 (4개뿐이면 부팅 실패):
 ```
 DISCORD_TOKEN=...
 AIRTABLE_API_KEY=...
 AIRTABLE_BASE_ID=...
 OPENAI_API_KEY=...
+RESULTS_CHANNEL_ID=...
+STAFF_LOGS_CHANNEL_ID=...
+REGISTERED_ROLE_ID=...
+CURRENT_SEASON=S1
+SEASON_START=2026-06-13
+SEASON_END=2026-08-09
 ```
+> 옵션(기본값 있음, 안 넣어도 부팅은 됨): `OCR_MODEL`, `LEADERBOARD_MIN_GAMES`, `PLACEMENT_GAMES`, `SEASON_CACHE_TTL`, `VERIFIED_ROLE_NAME`, `CHAMPS_ROLE_ID`, `CHAMPS_ROLE_NAME`, `NEATQUEUE_TOKEN`, `NEATQUEUE_QUEUE_CHANNEL_ID`, `WEEKLY_LEADERBOARD_CHANNEL_ID`, `MATCHER_RELOAD_TTL`.
 
 ---
 
@@ -85,9 +98,9 @@ OPENAI_API_KEY=...
 
 ## 7단계 — 동작 확인
 
-디스코드에서:
-- `!ign 테스트IGN` → 정상 응답?
-- `!stats` → DM 옴?
+디스코드에서 (모두 **슬래시 커맨드** — `!` prefix 명령은 없습니다):
+- `/ign ign_name: 테스트IGN` → 정상 응답? (슬래시 메뉴가 떠야 함)
+- `/stats` → DM 옴?
 - `#results`에 스샷 2장(한 메시지) → ✅ 반응 + 요약?
 
 다 되면 24/7 운영 완료입니다. 노트북을 꺼도 봇은 계속 돕니다.

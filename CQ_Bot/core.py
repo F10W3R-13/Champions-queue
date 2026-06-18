@@ -7,6 +7,7 @@ import logging
 import unicodedata
 from dotenv import load_dotenv
 from pyairtable import Api
+from urllib3.util.retry import Retry
 from openai import AsyncOpenAI
 
 from matcher import Matcher, normalize
@@ -84,7 +85,17 @@ RAW_IGN_FIELD = 'IGN as read'
 LINKED_PLAYER_FIELD = 'Player'
 
 # 3. Connect Airtable API
-airtable_api = Api(AIRTABLE_API_KEY)
+# Timeout = (connect, read) in seconds. Default is unlimited, which can hang
+# the reconcile loop indefinitely on a stalled network. Retry explicitly covers
+# 429 (rate limit) and 5xx with exponential backoff (pyairtable 3.x uses urllib3 Retry).
+_airtable_retry = Retry(
+    total=5,
+    status_forcelist=(429, 500, 502, 503, 504),
+    backoff_factor=0.5,        # 0, 0.5, 1, 2, 4, 8 seconds between retries
+    respect_retry_after_header=True,
+    allowed_methods=frozenset(["GET", "POST", "PATCH", "PUT", "DELETE"]),
+)
+airtable_api = Api(AIRTABLE_API_KEY, timeout=(5, 30), retry_strategy=_airtable_retry)
 players_table = airtable_api.table(BASE_ID, PLAYERS_TABLE_ID)
 hp_table = airtable_api.table(BASE_ID, HP_TABLE_ID)
 snd_table = airtable_api.table(BASE_ID, SND_TABLE_ID)
@@ -108,11 +119,39 @@ RECORD_TABLES = [
 # Periodic reconcile formula: only unprocessed records (no Player, no Status)
 PERIODIC_UNMATCHED_FORMULA = "AND({Player} = '', {Status} = '')"
 
+# --- Matcher reload TTL ---
+# The reconcile loop runs every 45s but reloads the matcher (full Players+Aliases
+# scan) only when the cache is older than this. Bot-driven mutations (/ign, /link,
+# OCR auto-learn) refresh the cache eagerly and bypass this TTL via force=True.
+# Only "operator edited Airtable directly in the UI" waits up to this TTL.
+MATCHER_RELOAD_TTL = int(os.getenv('MATCHER_RELOAD_TTL', '300'))  # 5 minutes
+
 # Serialize Airtable write sections
 airtable_lock = asyncio.Lock()
 
 # Initialize Matcher
 matcher = Matcher(players_table, aliases_table)
+
+# Last time matcher.reload() ran (monotonic-ish: wall clock is fine for a TTL gate).
+_matcher_reload_cache = {"t": 0.0}
+
+
+def reload_matcher_if_stale(force=False):
+    """TTL-gated matcher.reload(). MUST be called inside core.airtable_lock
+    (reload mutates matcher.roster/candidates in place; keeping it under the
+    lock serializes it against ingest's matcher.match() and run_ocr's roster read).
+
+    Returns True if a reload actually ran, False if it was skipped (cache fresh).
+
+    force=True bypasses the TTL - use at eager-refresh sites (/ign, /changeign,
+    /link) where a mutation just happened and the cache MUST reflect it now.
+    """
+    now = time.time()
+    if not force and _matcher_reload_cache["t"] and now - _matcher_reload_cache["t"] < MATCHER_RELOAD_TTL:
+        return False  # cache still fresh
+    matcher.reload()
+    _matcher_reload_cache["t"] = now
+    return True
 
 
 def get_val(fields, key, default="-"):
@@ -159,7 +198,10 @@ def reconcile_once(formula=None):
 
     stats = {"matched": 0, "review": 0, "unmatched": 0}
     for _mode, table, ign_field in RECORD_TABLES:
-        for rec in table.all(formula=formula):
+        # Field projection: reconcile reads only Player, Status, and IGN as read.
+        # HP/SND records also carry ~10-14 stat fields (Kills/Deaths/Score/Impact/...)
+        # that reconcile never touches - projecting them out trims the payload heavily.
+        for rec in table.all(formula=formula, fields=[LINKED_PLAYER_FIELD, "Status", ign_field]):
             f = rec["fields"]
             if f.get(LINKED_PLAYER_FIELD):
                 continue

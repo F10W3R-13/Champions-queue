@@ -23,8 +23,8 @@ matcher.py  3단계 매칭 (정규화 exact → Jaro-Winkler fuzzy → review/no
 Airtable  Players / HP / SND / Aliases 4테이블에 기록
         +  45초 reconcile 루프(미연결 레코드 재매칭 안전망)
 
-명령어: !ign(등록) / !changeign / !stats(DM)
-파일: main.py(432줄, 전부 한 파일) · matcher.py · ocr_prompt.py · _smoke_test.py(오프라인 페이크 테스트)
+명령어: /ign(등록) / /changeign / /stats(DM) — 모두 슬래시 커맨드
+파일: main.py + core.py + matcher.py + ocr_prompt.py + cogs/ (7개 cog) + _smoke_test.py(오프라인 페이크 테스트)
 배포: SparkedHost (DEPLOY_GUIDE 참고), .env로 비밀키 분리됨
 ```
 
@@ -47,38 +47,39 @@ Airtable  Players / HP / SND / Aliases 4테이블에 기록
 ## 3. 개선 로드맵
 
 ### Phase 0 — 정리 (30분)
-- [ ] `git init` + `.gitignore` (.env, __pycache__, *.bak)
-- [ ] `main.py.bak`, `matcher.py.bak`, `__pycache__` 삭제
+- [x] `git init` + `.gitignore` (.env, __pycache__, *.bak) — 2026-06-18 완료 (GitHub private repo `F10W3R-13/Champions-queue` push까지)
+- [x] `main.py.bak`, `matcher.py.bak`, `__pycache__` 삭제
 - [ ] STATUS.md를 서버일지/봇일지로 분리하거나 이 문서로 일원화
 
 ### Phase 1 — 버그 수정 (반나절)
-- [ ] B1: reconcile 필터를 `AND({Player}='', {Status}='')` 형태로 바꾸고, Status 동일하면 skip
-- [ ] B2: `!ign`에서 Primary IGN/Aliases 중복 검사 후 거부
-- [ ] B3: reconcile 루프 시작 시(또는 N분마다) `matcher.reload()` 호출
-- [ ] B4: `table.batch_create()`로 전환
-- [ ] 수정 후 `_smoke_test.py` 통과 확인 + B1/B2 케이스를 테스트에 추가
+- [x] B1: reconcile 필터를 `AND({Player}='', {Status}='')` 형태로 바꾸고, Status 동일하면 skip
+- [x] B2: `/ign`에서 Primary IGN/Aliases 중복 검사 후 거부
+- [x] B3: reconcile 루프에서 `matcher.reload()` 호출 — **TTL 게이트 적용** (45s 루프는 유지하되 reload는 5분 주기로, `core.reload_matcher_if_stale()` 경유). bot-driven 변형(`/ign`·`/changeign`·`/link`·OCR auto-learn)은 기존대로 즉시 갱신.
+- [x] B4: `table.batch_create()`로 전환
+- [x] 수정 후 `_smoke_test.py` 통과 확인 + B1/B2 케이스를 테스트에 추가
 
 ### Phase 2 — 관측성 (반나절)
-- [ ] `print` → `logging` 모듈 (파일 로그 + 레벨)
-- [ ] OCR 실패·예외 발생 시 `#logs`(스태프 채널)로 알림 전송
-- [ ] ingest 결과에 review 건이 있으면 스태프 채널에 해당 레코드 링크 멘션
+- [x] `print` → `logging` 모듈 (파일 로그 + 레벨) — main.py에 logging.basicConfig 적용
+- [x] OCR 실패·예외 발생 시 `#logs`(스태프 채널)로 알림 전송 — `core.send_staff_log` + ingest 예외 핸들러
+- [x] ingest 결과에 review 건이 있으면 스태프 채널에 해당 레코드 링크 멘션
 
 ### Phase 3 — Review 처리 워크플로 (1일)
-- [ ] `!review` — Needs Review 목록 조회 (스태프 전용)
-- [ ] `!link <record> <player>` — 수동 연결 + alias 학습 + 캐시 갱신
-- [ ] `!unlink` / `!reject` — 오매칭 해제
-- [ ] 처리 결과 즉시 matcher 캐시 반영
+- [x] `/review` — Needs Review 목록 조회 (스태프 전용)
+- [x] `/link <record> <member|ign>` — 수동 연결 + alias 학습 + 캐시 갱신
+- [x] `/unlink` / `/reject` — 오매칭 해제
+- [x] 처리 결과 즉시 matcher 캐시 반영 (`/link`가 reload + reconcile 수행)
 
 ### Phase 4 — UX / 비용 (1~2일)
-- [ ] prefix 명령(!) → 슬래시 커맨드(app_commands) 이전
-- [ ] `!stats`를 embed로 개선, `!leaderboard` 추가 (NeatQueue 보드와 역할 분담 정의)
+- [x] prefix 명령(!) → 슬래시 커맨드(app_commands) 이전 — 전체 15개 명령 슬래시화 완료
+- [x] `/stats`를 embed로 개선, `/leaderboard` 추가 (11개 지표 + season 옵션)
 - [ ] OCR 모델 `gpt-4.1` vs `gpt-4.1-mini` 정확도/비용 비교 → 환경변수로 이미 전환 가능(`OCR_MODEL`)
 - [ ] matcher 임계값(T_HIGH 0.92 / T_LOW 0.75 / MARGIN 0.08)을 실데이터 1~2주치로 보정 (matcher.py 주석의 원래 계획)
 
 ### Phase 5 — 구조 개선 (여유 있을 때)
-- [ ] main.py를 cog 단위로 분리: `cogs/ingest.py`, `cogs/registration.py`, `cogs/stats.py`, `config.py`
+- [x] main.py를 cog 단위로 분리 — `cogs/` (7개 cog). (원래 계획명 `config.py`는 실제 파일명 `core.py`로 반영됨)
 - [ ] `_smoke_test.py` → pytest 기반으로 확장 (normalize/fuzzy 경계값 단위 테스트)
-- [ ] 배포: 재시작 시 자동 복구 확인, requirements 버전 고정(lock)
+- [ ] 배포: 재시작 시 자동 복구 확인, requirements 버전 고정(lock) — pyairtable `>=3.4,<4`로 상한 고정 완료, 나머지는 진행 중
+- [x] **reconcile reload 최적화 (2026-06-19)**: `matcher.reload()`를 5분 TTL 게이트(`core.reload_matcher_if_stale`)로 감싸 API 읽기를 시간당 320→~48회로 감소. `matcher.reload()`와 `reconcile_once`에 `fields=` projection 적용해 payload 90%+ 절감. Airtable API에 `timeout=(5,30)` + urllib3 Retry(429/5xx, backoff 0.5) 명시 설정. pyairtable 상한 `>=3.4,<4`로 고정. _smoke_test에 TTL/projection 테스트 추가.
 
 ---
 
@@ -119,15 +120,16 @@ Airtable  Players / HP / SND / Aliases 4테이블에 기록
 - 봇 측 시즌 집계 엔진은 과거 시즌 조회·시즌 결산 전용으로 유지
 - 에이전트 컨텍스트 문서 `CLAUDE.md` 추가 (구조·스키마·운영 절차·함정 총정리)
 
-### Phase 8 — 큐 2개 동시 운영 (NeatQueue, 코드 변경 불필요)
-- [ ] `#queue-2` 채널 생성 (CHAMPIONS-QUEUE 카테고리, verified 전용)
-- [ ] `#queue-2`에서 `/startqueue` — **큐 이름을 기존 큐와 동일하게** 설정해야 MMR/스탯 공유됨 (이름이 다르면 별도 풀로 분리되니 주의)
-- [ ] 기존 큐 설정 복제: 기존 큐에서 `/config save` → 새 채널에서 `/config load`
-- [ ] 🔊 Lobby 음성채널 추가 (`/lobbychannel set`), `/resultschannel #results` 동일 지정
-- [ ] 리더보드는 큐 이름이 같으면 기존 `#leaderboard` 하나로 충분
+### Phase 8 — Champs 전용 큐 (NeatQueue, 코드 변경 불필요)
+> 2026-06-19 갱신: 메커니즘이 "동일 큐 이름"에서 **`/leaderboardconfig sharedstats`** 기반으로 변경됨.
+- [x] Champs 역할 보유자만 입장 가능한 큐 채널 (채널 권한으로 게이트, 봇 코드 없음)
+- [x] 두 큐 간 MMR/전적 공유: 각 큐 채널에서 `/leaderboardconfig sharedstats set: "Champions Queue"` (동일 sharedstats 이름)
+- [x] 결과는 같은 `#results`로 라우팅 (`/resultschannel`) → 스탯 ingest 통일
+- [ ] (선택) 동시 경기용 2번째 큐 운영 — 위 설정 복제로 가능
+- 상세: SELFROLES_SETUP.md B 섹션 참고
 
 ---
 
 ## 4. 권장 착수 순서
 
-**Phase 1의 B1이 최우선** — 지금도 45초마다 불필요한 Airtable 쓰기가 돌고 있을 수 있음(rate limit·요금·기록 오염 위험). 그다음 B2(데이터 무결성) → Phase 2(문제가 생겨도 보이게) → Phase 3(운영 동선) 순서가 효율적.
+**Phase 1(B1~B4)은 완료됨.** 그 다음으로 효율적인 순서: Phase 2(문제가 생겨도 보이게) → Phase 3(운영 동선) → Phase 5(reconcile reload 최적화는 2026-06-19 완료, 나머지 구조 개선은 여유 있을 때).

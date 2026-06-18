@@ -26,9 +26,9 @@
 | 엔진 | 역할 | 현재 구현 위치 |
 |---|---|---|
 | ① 입장(Verify) | 초대·검증 게이트 (수동 큐레이션) | 디스코드 `#verify` (수동) |
-| ② 등록(Registration) | 플레이어 IGN 등록, Discord ID에 매핑 | **Python 봇** (`!ign`, `!changeign`) |
-| ③ 수집(Ingestion) | 스코어보드 스샷 → AI OCR → DB 적재 | **Make.com** (당분간 유지) |
-| ④ 조회(Stats) | 본인 스탯 DM 조회 | **Python 봇** (`!stats`) |
+| ② 등록(Registration) | 플레이어 IGN 등록, Discord ID에 매핑 | **Python 봇** (`/ign`, `/changeign`) |
+| ③ 수집(Ingestion) | 스코어보드 스샷 → AI OCR → DB 적재 | **Python 봇** (`cogs/ingest.py`, Make.com은 선택적 폴백) |
+| ④ 조회(Stats) | 본인 스탯 DM 조회 | **Python 봇** (`/stats`) |
 
 정체성 모델: 모든 것이 **Discord ID(불변 키)** 에 묶임. IGN 변형은 **Aliases 테이블**이 Discord ID로 흡수. 즉 닉네임이 바뀌거나 OCR이 살짝 틀려도 한 사람으로 수렴.
 
@@ -38,20 +38,20 @@
 
 **Base: "Champion's Queue Stats"** (`appm2BhtqdgYGFCMH`) — 4개 테이블.
 
-- **Players** — Discord ID(기본키), Discord Handle, Primary IGN, Region. + HP/SND 각 지표의 Rollup(게임수·평균 K/D·Impact·OBJ·Damage·ADR 등) 완비.
+- **Players** — Discord ID(기본키), Discord Handle, Primary IGN, Region. + HP/SND 각 지표의 Rollup(게임수·평균 K/D·Impact·OBJ·Damage·ADR 등) 완비. **추가 Formula 필드**(Airtable이 자동 계산): `HP DPD`, `HP DPK`, `HP Assist %`, `HP ZCS`, `SND Assist %`.
 - **Aliases** — IGN(기본키), Player(링크), Source(Verify seed / Self-added / Staff-linked / Primary / Name Change / OCR Auto), **Created Time**.
 - **Records_HP** — IGN as read, Player(링크), Kills/Deaths/K-D/OBJ/Score/Impact/Total Damage/Capture Kill, Date, Map, Match ID, **Status(Matched/Unmatched/+Needs Review 예정)**.
 - **Records_SND** — IGN as read, Player(링크), Kills/Deaths/Assists/K-D/Score/Impact/ADR/First Kill/Lone Wolf Win, Date, Map, Match ID, Status.
 
-대시보드/리더보드 **뷰**는 UI에서 수동 생성 (API로 뷰 생성 불가). 리더보드 정렬 기준 = **평균 K/D + Impact**.
+대시보드/리더보드 **뷰**는 UI에서 수동 생성 (API로 뷰 생성 불가). `/leaderboard`는 11개 지표(K/D, Impact, Games, OBJ, Damage, ADR, First Kills + DPD/DPK/ZCS/Assist%) + season 스코프(career 포함)를 지원.
 
 ---
 
-## 4. AI 수집 파이프라인 (Make.com)
+## 4. AI 수집 파이프라인
 
-`#results`에 스코어보드 **2장** 게시 → **GPT-4.1 비전**(temp 0, JSON 강제)이 두 장을 **IGN 기준 병합**, 모드(HP/SND)·맵 판별, 10명 전원 추출 → ParseJSON → Aliases 검색 → Router로 **HP/SND × Matched/Unmatched** 4갈래 레코드 생성.
+`#results`에 스코어보드 **2장** 게시 → **GPT-4.1 비전**(temp 0, JSON 강제)이 두 장을 **IGN 기준 병합**, 모드(HP/SND)·맵 판별, 10명 전원 추출 → inline matcher(3단계)로 Matched/Review/Unmatched 분류 → Airtable 적재.
 
-프롬프트에는 모드/맵 판별 규칙, "이름은 깨져도 보이는 그대로", K/D/A 파싱, 시간(분:초→초) 변환 등 상세 규칙이 박혀 있음. **검증 완료·가동 중.**
+파이프라인은 원래 Make.com으로 구축됐으나, 지금은 **봇 자체에 내장**(`cogs/ingest.py`의 `on_message` 핸들러 + `core.run_ocr`). Make.com 시나리오는 검증용 선택적 폴백으로만 남아있고, 운영 안정화 후 OFF 처리 예정. 프롬프트에는 모드/맵 판별 규칙, "이름은 깨져도 보이는 그대로", K/D/A 파싱, 시간(분:초→초) 변환, 등록 로스터 힌트 등 상세 규칙이 박혀 있음. **검증 완료·가동 중.**
 
 ---
 
@@ -65,7 +65,7 @@
 2. **퍼지 매칭(Jaro-Winkler)** → 점수 높고 2등과 격차 크면 자동 확정, 애매하면 검토 큐.
 3. **미달** → 미연결(자진신고/검토 대기).
 - **Self-learning:** 퍼지로 확정된 깨진 표기를 Alias(`Source=OCR Auto`)로 적립 → 다음엔 1단계 즉시 매칭. 쓸수록 똑똑해짐.
-- **백그라운드 reconcile 루프**(30초)가 미연결 레코드를 자동으로 따라잡음 → 봇이 꺼져 있어도 재가동 시 소급 처리(데이터 유실 없음, 지연만).
+- **백그라운드 reconcile 루프**(45초)가 미연결 레코드를 자동으로 따라잡음 → 봇이 꺼져 있어도 재가동 시 소급 처리(데이터 유실 없음, 지연만). 2026-06-19 최적화: `matcher.reload()`는 5분 TTL 게이트로 주기를 늦추고, `fields=` projection으로 payload 90% 절감.
 
 **미적용 보강(선택):** OCR 단계에서 **로스터(등록 명단)를 프롬프트에 강제**해 오인식을 원천 감소(layer-1). 초대제라 "정답 명단"이 항상 존재한다는 점을 활용.
 
@@ -95,18 +95,21 @@
 ## 8. 진행 상황 요약
 
 ### ✅ 완료
-- Airtable 베이스·4테이블·Rollup·리더보드 뷰 설계.
-- Make.com 수집 파이프라인(GPT-4.1 OCR) 구축·검증.
-- Python 봇: 등록(`!ign`/`!changeign`) + 조회(`!stats`) + 자동연결, 버그 2종(Source typecast, relink Status=Matched) 수정.
-- OCR 보정 엔진(`matcher.py` 3단+self-learning) + reconcile 루프 통합본(`main_final.py`).
-- NeatQueue MMR/랭크 설계.
+- Airtable 베이스·4테이블·Rollup·Formula(고급 지표)·리더보드 뷰 설계.
+- 수집 파이프라인(GPT-4.1 OCR) — 원래 Make.com, 이제 봇 내장(`cogs/ingest.py`)으로 이전 완료. Make.com은 선택적 폴백.
+- Python 봇: 등록(`/ign`/`/changeign`) + 조회(`/stats`) + `/leaderboard`(11지표·season) + 자동연결, 버그 2종(Source typecast, relink Status=Matched) 수정.
+- OCR 보정 엔진(`matcher.py` 3단+self-learning) + reconcile 루프 통합(`cogs/ingest.py`, `main.py` + `core.py`). 2026-06-19: reload TTL 게이트 + fields projection + Airtable retry 적용.
+- NeatQueue MMR/랭크 설계 + Impact 보정(`cogs/mmr.py`, 드라이런).
+- 시즌 시스템(`/season`, `/seasonreport`, `/weeklyreport` + 주간 자동 포스트).
+- 셀프역할 패널 + 챔피언십 전용 큐 게이트(`/rolepanel`, `/verifypanel`).
 - 서버 가이드·온보딩·스탯소개 카피 일체.
+- 2026-06-18: GitHub 비공개 repo 백업 (`F10W3R-13/Champions-queue`).
 
 ### 🔧 남은 작업 (배포 전 직접 할 일)
 1. Airtable: Records_HP·SND의 Status에 **`Needs Review` 옵션 추가** + 검토용 뷰 생성(UI).
-2. 로컬: `pip install rapidfuzz`, `matcher.py` + `main_final.py`(→`main.py`) 배치, `.env` 확인.
+2. 로컬/호스트: `pip install -r requirements.txt` (rapidfuzz 포함), `main.py` + `core.py` + `cogs/` 배치, `.env` 확인.
 3. Discord 개발자 포털: **Members + Message Content 인텐트 ON.**
-4. 실행·검증(자동 보정·`!ign`·`!stats`).
+4. 실행·검증(자동 보정·`/ign`·`/stats`).
 
 ### ⏳ 보류/선택
 - 수집(③)을 Python으로 이전할지 → **봇이 클라우드에서 안정화된 뒤** 2단계로 포팅, 그때 인라인 matcher + 로스터 프롬프트까지 얹고 Make OFF. (지금은 하이브리드 유지)

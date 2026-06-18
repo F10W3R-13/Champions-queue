@@ -103,15 +103,21 @@ class Ingest(commands.Cog):
 
     @tasks.loop(seconds=45)
     async def reconcile_loop(self):
-        """Safety-net loop. Normal path is inline-matched at ingest, so usually 0."""
+        """Safety-net loop. Normal path is inline-matched at ingest, so usually 0.
+
+        reconcile_once runs every 45s (cheap: B1 guard = 0 writes in steady state,
+        and the unmatched formula returns ~0 records). matcher.reload() is gated
+        by a 5-min TTL inside reload_matcher_if_stale() - it's a full Players+Aliases
+        scan and only needs to catch direct Airtable UI edits (bot-driven mutations
+        refresh the cache eagerly)."""
         try:
             async with core.airtable_lock:
-                # B3: reload matcher cache to capture manual changes in Airtable
-                await asyncio.to_thread(core.matcher.reload)
+                # B3: reload matcher cache (TTL-gated) to capture manual Airtable edits
+                reloaded = await asyncio.to_thread(core.reload_matcher_if_stale)
                 s = await asyncio.to_thread(core.reconcile_once)
-            if s["matched"] or s["review"]:
-                logger.info("reconcile: matched=%d review=%d unmatched=%d"
-                            % (s["matched"], s["review"], s["unmatched"]))
+            if reloaded or s["matched"] or s["review"]:
+                logger.info("reconcile: reload=%s matched=%d review=%d unmatched=%d"
+                            % (reloaded, s["matched"], s["review"], s["unmatched"]))
         except Exception as e:
             logger.error("reconcile error: %s" % e, exc_info=True)
 
