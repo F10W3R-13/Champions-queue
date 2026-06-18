@@ -9,7 +9,9 @@ Discord stats bot for **Champion's Queue** — an invite-only CODM ranked commun
 (Guild `1512319088146255982`). Players post 2 scoreboard screenshots in #results →
 GPT-4.1 vision OCR → fuzzy IGN matching → Airtable. NeatQueue (3rd-party bot) handles
 queues/MMR; this bot handles identity, stats, seasons. Hosted 24/7 on SparkedHost
-(Apollo panel, Python 3.11, startup file `main.py`).
+(Apollo panel, Python 3.11, startup file `CQ_Bot/main.py`, GitHub autodeploy via Setup Git).
+Make.com ingestion retired 2026-06-19 — the bot now handles all OCR ingestion itself
+(`cogs/ingest.py` on_message + `core.run_ocr`).
 
 ## File map
 

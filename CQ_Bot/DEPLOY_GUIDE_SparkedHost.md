@@ -107,19 +107,32 @@ SEASON_END=2026-08-09
 
 ---
 
-## 8단계 — Make 끄기 (1~2번 세션 검증 후)
+## 8단계 — Make 끄기 (✅ 2026-06-19 완료)
 
-호스트 봇이 주말 실경기 1~2회를 문제없이 처리하는 걸 확인한 뒤:
-- Make.com에서 `CQ - AI stats reade` 시나리오를 **OFF**로 두면 됩니다.
-- (Match ID 중복 방지가 있어 잠깐 둘 다 켜져도 기록 중복은 안 생깁니다. 하지만 검증 끝나면 꺼서 단일 시스템으로.)
+봇이 주말 실경기를 문제없이 처리하는 걸 확인했으므로 **Make.com은 완전 폐기**:
+- Make.com 시나리오 4개(AI stats reade, Sending stats DM, IGN Register, Integration Airtable) **전부 비활성화**
+- Make.com **결제 해지** (Free 플랜으로 다운그레이드, 시나리오는 보존)
+- 이제 수집·등록·조회는 **봇이 단독 처리** (이중 호출로 인한 OpenAI 비용 2배 낭비도 해소)
+
+> 봇의 `match_id_exists()` 중복 방지가 있어, 만약 Make를 다시 켜도 레코드 중복은 안 생깁니다. 하지만 단일 시스템이 더 깔끔합니다.
 
 ---
 
-## 코드를 고쳤을 때 (나중에)
+## 코드를 고쳤을 때 (✅ GitHub 자동배포 구축 완료)
 
-파일 관리자에서 바뀐 파일만 다시 업로드 → **Restart(재시작)**.
+**2026-06-19 GitHub 자동배포 연결 완료.** 이제 파일 업로드 방식은 필요 없습니다.
 
-> 더 편하게 하려면 GitHub 저장소를 만들고 Apollo 패널의 **Git 자동 배포**를 연결하면, 깃에 push만 해도 자동 반영됩니다. (이땐 `.env`는 깃에 올리지 말고 패널 변수로 넣어야 합니다.) 지금 당장은 파일 업로드 방식으로 충분합니다.
+워크플로:
+1. 로컬에서 코드/문서 수정
+2. 랩탑 cmd에서:
+   ```
+   cd /d "C:\Users\0616y\Downloads\Champion's Queue"
+   git add -A && git commit -m "변경 내용 요약" && git push
+   ```
+3. Apollo 패널에서 **Restart** → startup 명령어가 `git pull`을 자동 실행 → 새 코드 반영
+
+> `.env`는 GitHub에 없으므로(gitignore), push해도 호스트의 `.env`는 그대로 유지됩니다.
+> startup file은 `CQ_Bot/main.py` (Apollo Startup Settings에서 설정).
 
 ---
 
