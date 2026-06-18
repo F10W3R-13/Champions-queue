@@ -1,7 +1,9 @@
 # CLAUDE.md — Agent Context for CQ_Bot
 
 > Read this first. It replaces the need to re-scan every file.
-> Last updated: 2026-06-14 (self-roles panel + Teams table + Champs-only queue).
+> Last updated: 2026-06-19 (autodeploy + Make retirement + reconcile optimization + doc sync).
+>
+> **새 세션 에이전트는 먼저 `../HANDOFF.md`를 읽을 것** — 최신 세션 진행 상황, 결정, 코드 변경 내역, 다음 작업이 정리되어 있음.
 
 ## What this is
 
