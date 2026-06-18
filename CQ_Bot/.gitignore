@@ -1,0 +1,33 @@
+# Inherited from the parent .gitignore at repo root (Champion's Queue/).
+# This file is kept as a defensive second layer in case the repo root ever
+# moves back to CQ_Bot/ or files get copied elsewhere.
+
+# ===== Secrets =====
+.env
+.env.*
+!.env.example
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+
+# ===== Runtime state =====
+mmr_state.json
+*.state.json
+*.sqlite
+*.db
+*.cache
+*.pid
+
+# ===== Logs & backups =====
+*.log
+*.bak
+*.swp
+
+# ===== Windows / OS / IDE =====
+nul
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
