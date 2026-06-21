@@ -24,6 +24,12 @@ logger = logging.getLogger("CQ_Bot.mmr")
 STATE_FILE = "mmr_state.json"
 DISCORD_EPOCH_MS = 1420070400000
 MATCH_WINDOW_HOURS = 4      # screenshots for a match must be posted within this window
+# Look BACK this far from mtime when scanning for impact records. NeatQueue's
+# mtime is the SERIES end (e.g. the Bo3-clinching game), but OCR screenshots are
+# posted after each individual game — which can be earlier than the series end.
+# Without this lookback, game-1/game-2 screenshots fall before the window and
+# the modifier sees no data.
+MATCH_WINDOW_LOOKBACK = 2
 MAX_MATCH_AGE_HOURS = 48    # ignore matches older than this (startup backlog guard)
 MIN_PLAYERS_WITH_DATA = 6   # need impact data for at least this many of the 10 players
 
@@ -210,8 +216,13 @@ class MMRModifier(commands.Cog):
         return handled
 
     async def apply_modifiers_for_match(self, m, mtime, changes):
+        # Window starts BEFORE mtime because NeatQueue's mtime is the series end
+        # (e.g. Bo3 game-2 clinch), while OCR screenshots are posted after each
+        # game ends — which can be earlier than the series end. Look back a couple
+        # hours to catch game-1/game-2 screenshots, then forward 4h for late posts.
+        window_start = mtime - timedelta(hours=MATCH_WINDOW_LOOKBACK)
         window_end = mtime + timedelta(hours=MATCH_WINDOW_HOURS)
-        impacts = await asyncio.to_thread(impacts_in_window, mtime, window_end)
+        impacts = await asyncio.to_thread(impacts_in_window, window_start, window_end)
         did_map = await asyncio.to_thread(core.discord_id_map)          # discord_id -> pid
         directory = await asyncio.to_thread(core.player_directory_cached)  # pid -> (ign, handle)
 
@@ -412,9 +423,10 @@ class MMRModifier(commands.Cog):
                     skipped += 1
                     continue
                 # Look up this player's impact in the match's time window (same
-                # method as the per-match loop — a 4h window average).
+                # method as the per-match loop — look back + forward window average.
+                window_start = mtime - timedelta(hours=MATCH_WINDOW_LOOKBACK)
                 window_end = mtime + timedelta(hours=MATCH_WINDOW_HOURS)
-                impacts = await asyncio.to_thread(impacts_in_window, mtime, window_end)
+                impacts = await asyncio.to_thread(impacts_in_window, window_start, window_end)
                 imp_list = impacts.get(pid)
                 if not imp_list:
                     # Player still has no impact data (screenshots not posted or
