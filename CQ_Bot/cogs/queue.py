@@ -69,7 +69,6 @@ PHASES = [
 PLAYERS_PER_LOBBY = 10  # CoD 5v5 hard step
 
 FOOTER_PREFIX = "date:"  # embed footer stash marker, e.g. "date:2026-06-20 • CQ Reminder"
-KST = ZoneInfo("Asia/Seoul")  # for showing KST in the embed (owner is KST-based)
 
 
 def is_staff(interaction: discord.Interaction):
@@ -196,17 +195,16 @@ def _parse_footer_date(embed):
 
 
 def _window_times_line(now_utc):
-    """One-line summary of both windows' open times in local + KST, for the embed.
+    """One-line summary of both windows' open times in their own local tz, for the embed.
 
     Computed fresh so DST is always correct. Shows each window's open time in its
-    own local tz plus KST (the owner's tz) for cross-region clarity."""
+    own local tz (ET / CET)."""
     parts = []
     for w in WINDOWS:
         _, open_utc = _window_date_and_open_utc(w)
         local = open_utc.astimezone(w["tz"]).strftime("%H:%M")
-        kst = open_utc.astimezone(KST).strftime("%H:%M")
         flag = "🇺🇸" if w["key"] == "na" else "🇪🇺"
-        parts.append(f"{flag} **{w['label']} {local}** ({w['tz'].key}) · KST **{kst}**")
+        parts.append(f"{flag} **{w['label']} {local}** ET" if w["key"] == "na" else f"{flag} **{w['label']} {local}** CET")
     return " · ".join(parts)
 
 
