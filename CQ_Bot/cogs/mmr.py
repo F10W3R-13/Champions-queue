@@ -42,17 +42,25 @@ def snowflake_dt(message_id):
 
 
 def load_state():
+    """Returns (processed_set, backfilled_set). Both keyed by match_key().
+    'backfilled' is absent in older state files -> empty set (backwards compatible)."""
     try:
         with open(STATE_FILE) as f:
-            return set(json.load(f).get("processed", []))
+            data = json.load(f)
+        processed = set(data.get("processed", []))
+        backfilled = set(data.get("backfilled", []))
+        return processed, backfilled
     except Exception:
-        return set()
+        return set(), set()
 
 
-def save_state(processed):
+def save_state(processed, backfilled):
     try:
         with open(STATE_FILE, "w") as f:
-            json.dump({"processed": list(processed)[-500:]}, f)
+            json.dump({
+                "processed": list(processed)[-500:],
+                "backfilled": list(backfilled)[-500:],
+            }, f)
     except Exception as e:
         logger.error("Could not save MMR state: %s", e)
 
@@ -83,7 +91,7 @@ def impacts_in_window(start_dt, end_dt):
 class MMRModifier(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.processed = load_state()
+        self.processed, self.backfilled = load_state()
 
     def cog_unload(self):
         self.modifier_loop.cancel()
@@ -170,7 +178,7 @@ class MMRModifier(commands.Cog):
             if result:
                 await core.send_staff_log(self.bot, embed=result)
         if handled:
-            save_state(self.processed)
+            save_state(self.processed, self.backfilled)
         if announce_empty and not handled:
             return 0
         return handled
@@ -253,6 +261,78 @@ class MMRModifier(commands.Cog):
                 await interaction.followup.send(f"No new completed matches to process ({mode}).")
         except Exception as e:
             logger.error("applymodifiers error: %s", e, exc_info=True)
+            await interaction.followup.send(f"❌ Error: {e}")
+
+    @app_commands.command(name="backfillmodifiers",
+                          description="Re-apply MMR modifiers to recent processed matches (staff only).")
+    @app_commands.describe(count="Number of recent processed matches to backfill (1-20, default 2).")
+    async def backfill_modifiers(self, interaction: discord.Interaction, count: int = 2):
+        if not is_staff(interaction):
+            await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
+            return
+        if not core.NEATQUEUE_TOKEN:
+            await interaction.response.send_message("❌ `NEATQUEUE_TOKEN` is not configured.", ephemeral=True)
+            return
+        if not 1 <= count <= 20:
+            await interaction.response.send_message("❌ `count` must be between 1 and 20.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            history = await asyncio.to_thread(core.nq_history)
+            if not isinstance(history, list):
+                await interaction.followup.send("❌ Could not fetch NeatQueue match history.")
+                return
+
+            # Select candidates: processed (handled once) but not yet backfilled.
+            # Parse + sort by mtime descending so "most recent" wins.
+            candidates = []
+            for m in history:
+                if not isinstance(m, dict):
+                    continue
+                key = self.match_key(m)
+                if key not in self.processed or key in self.backfilled:
+                    continue
+                mtime, changes = self.parse_match(m)
+                if mtime is None or not changes or all(not c for c in changes.values()):
+                    continue
+                candidates.append((mtime, key, m, changes))
+            candidates.sort(key=lambda t: t[0], reverse=True)
+            targets = candidates[:count]
+
+            if not targets:
+                await interaction.followup.send(
+                    "ℹ️ No matches eligible for backfill (none in `processed` but not `backfilled`).")
+                return
+
+            mode = "DRY-RUN (global MMR_MODIFIER_DRYRUN=1)" if core.MMR_MODIFIER_DRYRUN else "LIVE"
+            await interaction.followup.send(
+                f"🔄 Backfilling up to **{len(targets)}** match(es) ({mode}). Reports to staff log shortly.")
+
+            applied_matches = 0
+            skipped_no_data = 0
+            for mtime, key, m, changes in targets:
+                # Re-run the full modifier pipeline (re-reads impact, recomputes, applies
+                # unless global dry-run). apply_modifiers_for_match never returns "retry"
+                # for a processed match with data present; "retry" here means transient
+                # no-data — skip and leave it eligible for a later retry.
+                result = await self.apply_modifiers_for_match(m, mtime, changes)
+                if result == "retry" or result is None:
+                    skipped_no_data += 1
+                    logger.info("Backfill: match %s skipped (no impact data yet).", key)
+                    continue
+                self.backfilled.add(key)
+                applied_matches += 1
+                # Stamp the report as a backfill so staff can tell it apart.
+                if isinstance(result, discord.Embed):
+                    result.title = (result.title or "") + " (backfill)"
+                    await core.send_staff_log(self.bot, embed=result)
+
+            save_state(self.processed, self.backfilled)
+            await interaction.followup.send(
+                f"✅ Backfill complete: **{applied_matches}** match(es) processed, "
+                f"{skipped_no_data} skipped (no impact data), {mode}.")
+        except Exception as e:
+            logger.error("backfillmodifiers error: %s", e, exc_info=True)
             await interaction.followup.send(f"❌ Error: {e}")
 
 
