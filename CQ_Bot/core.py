@@ -73,6 +73,21 @@ WEAPON_ROLE_NAMES = {
     "Marksman": "Marksman",
 }
 
+# --- Queue reminder (cogs/queue.py) ---
+# Discord role to ping on T-30min / T-0 LIVE reminders. Created by setup scripts
+# ("Queue Ping"); ID resolved from .env.
+QUEUE_PING_ROLE_ID = int(os.getenv('QUEUE_PING_ROLE_ID', '0'))
+# Channel where players actually JOIN the queue (NeatQueue's interactive panel).
+# Verified queue channels via GET /api/v1/queuechannels: "queue" and "queue-2026champs".
+# Default = queue-2026champs (pilot channel). Set QUEUE_JOIN_CHANNEL_ID to override.
+QUEUE_JOIN_CHANNEL_ID = int(os.getenv('QUEUE_JOIN_CHANNEL_ID', '1514827048885948516'))
+# Channel where the bot posts reminder messages. 0 = fall back to QUEUE_JOIN_CHANNEL_ID.
+QUEUE_REMINDER_CHANNEL_ID = int(os.getenv('QUEUE_REMINDER_CHANNEL_ID', '0'))
+# On-disk persistence for RSVP rosters + dedup keys (restart-safe). Same dir as mmr_state.json.
+QUEUE_STATE_FILE = os.getenv('QUEUE_STATE_FILE', 'queue_state.json')
+# 1 = enable the scheduled reminder loop. Set 0 to disable without uninstalling the cog.
+QUEUE_REMINDER_ENABLED = os.getenv('QUEUE_REMINDER_ENABLED', '1') == '1'
+
 # --- Airtable Table IDs ---
 PLAYERS_TABLE_ID = 'tbl2sN1bXNlpcUBhV'
 HP_TABLE_ID = 'tblDp5p1XTzdeFmWm'
@@ -521,6 +536,25 @@ def nq_add_mmr(user_id, value, channel_id=None):
         "user_id": int(user_id),
     }
     r = _rq.post(f"{NEATQUEUE_BASE}/api/v2/add/stats", headers=_nq_headers(), json=body, timeout=20)
+    r.raise_for_status()
+    return r.json()
+
+
+def nq_lock(channel_id=None):
+    """Lock the queue channel (prevent players from joining). Schema verified:
+    POST /api/v2/lock with body {"channel_id": int}. The matching /unlock endpoint
+    accepts the same single field."""
+    body = {"channel_id": int(channel_id or NEATQUEUE_QUEUE_CHANNEL_ID)}
+    r = _rq.post(f"{NEATQUEUE_BASE}/api/v2/lock", headers=_nq_headers(), json=body, timeout=20)
+    r.raise_for_status()
+    return r.json()
+
+
+def nq_unlock(channel_id=None):
+    """Unlock the queue channel (allow players to join). Schema verified:
+    POST /api/v2/unlock requires only {"channel_id": int}."""
+    body = {"channel_id": int(channel_id or NEATQUEUE_QUEUE_CHANNEL_ID)}
+    r = _rq.post(f"{NEATQUEUE_BASE}/api/v2/unlock", headers=_nq_headers(), json=body, timeout=20)
     r.raise_for_status()
     return r.json()
 

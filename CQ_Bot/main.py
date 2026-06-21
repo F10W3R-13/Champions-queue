@@ -27,7 +27,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Load cogs on startup
 async def load_extensions():
-    cogs_list = ["cogs.registration", "cogs.stats", "cogs.ingest", "cogs.season", "cogs.mmr", "cogs.selfroles", "cogs.verify"]
+    cogs_list = ["cogs.registration", "cogs.stats", "cogs.ingest", "cogs.season", "cogs.mmr", "cogs.selfroles", "cogs.verify", "cogs.queue"]
     for cog in cogs_list:
         try:
             await bot.load_extension(cog)
