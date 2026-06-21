@@ -161,6 +161,10 @@ class MMRModifier(commands.Cog):
                 continue
 
             result = await self.apply_modifiers_for_match(m, mtime, changes)
+            if result == "retry":
+                # OCR data not ready yet — do NOT mark as processed; retry next pass.
+                # The 48h max-age guard (above) is the eventual backstop.
+                continue
             self.processed.add(key)
             handled += 1
             if result:
@@ -185,11 +189,15 @@ class MMRModifier(commands.Cog):
                 player_imp[did] = sum(impacts[pid]) / len(impacts[pid])
 
         if not player_imp:
+            # Transient: OCR likely hasn't ingested the screenshots yet. Return a
+            # sentinel so the caller does NOT mark this match as permanently
+            # processed — it will be retried on the next loop pass (every 10 min)
+            # until impact data appears or the 48h max-age guard drops it.
             await core.send_staff_log(
                 self.bot,
-                content=(f"ℹ️ MMR modifier skipped for match at `{m.get('time')}` — no impact data "
-                         f"(screenshots missing or unmatched)."))
-            return None
+                content=(f"ℹ️ MMR modifier waiting for match at `{m.get('time')}` — no impact data yet "
+                         f"(screenshots not posted or unmatched). Retrying next pass."))
+            return "retry"
 
         # Absolute Impact band: MIN -> -MAX, MAX -> +MAX, linear; neutral = midpoint.
         lo, hi, cap = core.MMR_IMPACT_MIN, core.MMR_IMPACT_MAX, core.MMR_MODIFIER_MAX
