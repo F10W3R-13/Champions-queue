@@ -89,7 +89,8 @@ QUEUE_PING_ROLE_ID = int(os.getenv('QUEUE_PING_ROLE_ID', '0'))
 # Verified queue channels via GET /api/v1/queuechannels: "queue" and "queue-2026champs".
 # Default = queue-2026champs (pilot channel). Set QUEUE_JOIN_CHANNEL_ID to override.
 QUEUE_JOIN_CHANNEL_ID = int(os.getenv('QUEUE_JOIN_CHANNEL_ID', '1514827048885948516'))
-# Channel where the bot posts reminder messages. 0 = fall back to QUEUE_JOIN_CHANNEL_ID.
+# Channel where the bot posts reminder messages. Recommended: #announcements.
+# 0 = fall back to QUEUE_JOIN_CHANNEL_ID.
 QUEUE_REMINDER_CHANNEL_ID = int(os.getenv('QUEUE_REMINDER_CHANNEL_ID', '0'))
 # On-disk persistence for RSVP rosters + dedup keys (restart-safe). Same dir as mmr_state.json.
 QUEUE_STATE_FILE = os.getenv('QUEUE_STATE_FILE', 'queue_state.json')
