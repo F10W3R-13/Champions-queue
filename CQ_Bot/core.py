@@ -536,11 +536,15 @@ def nq_history():
 
 
 def nq_add_mmr(user_id, value, channel_id=None):
-    """Increment (or decrement, negative) a player's MMR. Verified working in 7-1."""
+    """Increment (or decrement, negative) a player's MMR. Verified working in 7-1.
+
+    NeatQueue's /api/v2/add/stats requires `value` to be an INTEGER (422 otherwise).
+    We round half-to-even at the API boundary so callers can pass floats freely.
+    """
     body = {
         "channel_id": int(channel_id or NEATQUEUE_QUEUE_CHANNEL_ID),
         "stat": "mmr",
-        "value": float(value),
+        "value": int(round(float(value))),
         "user_id": int(user_id),
     }
     r = _rq.post(f"{NEATQUEUE_BASE}/api/v2/add/stats", headers=_nq_headers(), json=body, timeout=20)

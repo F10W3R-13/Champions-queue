@@ -217,7 +217,9 @@ class MMRModifier(commands.Cog):
         lines = []
         for did, imp in sorted(player_imp.items(), key=lambda kv: kv[1], reverse=True):
             imp_clamped = max(lo, min(hi, imp))
-            mod = round((imp_clamped - mid) / half * cap, 1)
+            # NeatQueue's add/stats requires an integer value; round the modifier
+            # to the nearest whole point here so the embed shows exactly what gets applied.
+            mod = int(round((imp_clamped - mid) / half * cap))
             pid = did_map.get(did)
             ign = directory.get(pid, ("?", ""))[0] if pid else "?"
             applied = ""
