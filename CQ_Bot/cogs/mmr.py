@@ -42,27 +42,52 @@ def snowflake_dt(message_id):
 
 
 def load_state():
-    """Returns (processed_set, backfilled_set). Both keyed by match_key().
-    'backfilled' is absent in older state files -> empty set (backwards compatible)."""
+    """Returns (processed_set, backfilled_set, applied_set).
+    - processed/backfilled: match-level dedup, keyed by match_key().
+    - applied: player+match-level dedup, keyed by '{discord_id}|{match_key}'.
+      Tracks exactly which (player, match) combos have received a modifier, so a
+      newly-linked player can be backfilled without double-applying to the other 9.
+    All absent in older state files -> empty sets (backwards compatible)."""
     try:
         with open(STATE_FILE) as f:
             data = json.load(f)
         processed = set(data.get("processed", []))
         backfilled = set(data.get("backfilled", []))
-        return processed, backfilled
+        applied = set(data.get("applied", []))
+        return processed, backfilled, applied
     except Exception:
-        return set(), set()
+        return set(), set(), set()
 
 
-def save_state(processed, backfilled):
+def save_state(processed, backfilled, applied):
     try:
         with open(STATE_FILE, "w") as f:
             json.dump({
                 "processed": list(processed)[-500:],
                 "backfilled": list(backfilled)[-500:],
+                # player+match keys are numerous; cap to keep the file bounded.
+                "applied": list(applied)[-2000:],
             }, f)
     except Exception as e:
         logger.error("Could not save MMR state: %s", e)
+
+
+def _applied_key(discord_id, match_key):
+    """Per-(player, match) idempotency key for the applied set."""
+    return f"{discord_id}|{match_key}"
+
+
+def compute_modifier(impact):
+    """Map a single impact value to an integer MMR modifier (±MMR_MODIFIER_MAX).
+
+    Absolute Impact band: MIN -> -MAX, MAX -> +MAX, linear; neutral = midpoint.
+    Factored out so both the per-match loop and the per-player backfill use the
+    exact same formula."""
+    lo, hi, cap = core.MMR_IMPACT_MIN, core.MMR_IMPACT_MAX, core.MMR_MODIFIER_MAX
+    mid = (lo + hi) / 2.0
+    half = (hi - lo) / 2.0 or 1.0
+    imp_clamped = max(lo, min(hi, impact))
+    return int(round((imp_clamped - mid) / half * cap))
 
 
 def impacts_in_window(start_dt, end_dt):
@@ -91,7 +116,7 @@ def impacts_in_window(start_dt, end_dt):
 class MMRModifier(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.processed, self.backfilled = load_state()
+        self.processed, self.backfilled, self.applied = load_state()
 
     def cog_unload(self):
         self.modifier_loop.cancel()
@@ -179,7 +204,7 @@ class MMRModifier(commands.Cog):
             if result:
                 await core.send_staff_log(self.bot, embed=result)
         if handled:
-            save_state(self.processed, self.backfilled)
+            save_state(self.processed, self.backfilled, self.applied)
         if announce_empty and not handled:
             return 0
         return handled
@@ -210,16 +235,12 @@ class MMRModifier(commands.Cog):
 
         # Absolute Impact band: MIN -> -MAX, MAX -> +MAX, linear; neutral = midpoint.
         lo, hi, cap = core.MMR_IMPACT_MIN, core.MMR_IMPACT_MAX, core.MMR_MODIFIER_MAX
-        mid = (lo + hi) / 2.0
-        half = (hi - lo) / 2.0 or 1.0
+        mk = self.match_key(m)
 
         mode = "🧪 DRY-RUN (not applied)" if core.MMR_MODIFIER_DRYRUN else "✅ APPLIED"
         lines = []
         for did, imp in sorted(player_imp.items(), key=lambda kv: kv[1], reverse=True):
-            imp_clamped = max(lo, min(hi, imp))
-            # NeatQueue's add/stats requires an integer value; round the modifier
-            # to the nearest whole point here so the embed shows exactly what gets applied.
-            mod = int(round((imp_clamped - mid) / half * cap))
+            mod = compute_modifier(imp)
             pid = did_map.get(did)
             ign = directory.get(pid, ("?", ""))[0] if pid else "?"
             applied = ""
@@ -227,6 +248,8 @@ class MMRModifier(commands.Cog):
                 try:
                     await asyncio.to_thread(core.nq_add_mmr, did, mod)
                     applied = " ✔"
+                    # Record per-(player, match) so a later /link backfill skips this combo.
+                    self.applied.add(_applied_key(did, mk))
                 except Exception as e:
                     applied = f" ⚠ failed: {e}"
                     logger.error("nq_add_mmr failed for %s: %s", did, e)
@@ -330,13 +353,110 @@ class MMRModifier(commands.Cog):
                     result.title = (result.title or "") + " (backfill)"
                     await core.send_staff_log(self.bot, embed=result)
 
-            save_state(self.processed, self.backfilled)
+            save_state(self.processed, self.backfilled, self.applied)
             await interaction.followup.send(
                 f"✅ Backfill complete: **{applied_matches}** match(es) processed, "
                 f"{skipped_no_data} skipped (no impact data), {mode}.")
         except Exception as e:
             logger.error("backfillmodifiers error: %s", e, exc_info=True)
             await interaction.followup.send(f"❌ Error: {e}")
+
+    # ---------- per-player backfill (called after /link or /ign) ----------
+
+    async def apply_modifiers_for_player(self, discord_id, player_name, count=20):
+        """After a player's records are newly linked (via /link or /ign), find
+        their recent NeatQueue matches and apply their Impact modifier — without
+        re-applying to the other players in those matches.
+
+        Idempotency is per (discord_id, match_key) via self.applied, so this is
+        safe to call multiple times and never double-applies. A match where the
+        player was previously unmatched (no Player link → invisible to the per-match
+        loop) gets caught here now that they're linked.
+
+        Runs as a background task from /link and /ign, so it must never raise."""
+        try:
+            history = await asyncio.to_thread(core.nq_history)
+            if not isinstance(history, list):
+                logger.warning("apply_modifiers_for_player: history not a list.")
+                return
+
+            # Find recent matches this player participated in (newest first).
+            targets = []
+            for m in history:
+                if not isinstance(m, dict):
+                    continue
+                mtime, changes = self.parse_match(m)
+                if mtime is None or discord_id not in changes:
+                    continue
+                mk = self.match_key(m)
+                targets.append((mtime, mk, m))
+            targets.sort(key=lambda t: t[0], reverse=True)
+            targets = targets[:count]
+
+            if not targets:
+                logger.info("apply_modifiers_for_player(%s): no matches found.", player_name)
+                return
+
+            did_map = await asyncio.to_thread(core.discord_id_map)
+            pid = did_map.get(discord_id)
+            if not pid:
+                logger.info("apply_modifiers_for_player(%s): player not in Airtable yet.", player_name)
+                return
+
+            applied_lines = []
+            applied_count = 0
+            skipped = 0
+            for mtime, mk, m in targets:
+                apk = _applied_key(discord_id, mk)
+                if apk in self.applied:
+                    skipped += 1
+                    continue
+                # Look up this player's impact in the match's time window (same
+                # method as the per-match loop — a 4h window average).
+                window_end = mtime + timedelta(hours=MATCH_WINDOW_HOURS)
+                impacts = await asyncio.to_thread(impacts_in_window, mtime, window_end)
+                imp_list = impacts.get(pid)
+                if not imp_list:
+                    # Player still has no impact data (screenshots not posted or
+                    # still unmatched). Skip without marking applied — retryable
+                    # on the next link/registration event.
+                    continue
+                imp = sum(imp_list) / len(imp_list)
+                mod = compute_modifier(imp)
+                if mod == 0:
+                    self.applied.add(apk)  # neutral; record so we don't recompute
+                    continue
+                if core.MMR_MODIFIER_DRYRUN:
+                    self.applied.add(apk)
+                    applied_lines.append(f"`{m.get('time')}`: dry-run (would be {mod:+d})")
+                    continue
+                try:
+                    await asyncio.to_thread(core.nq_add_mmr, discord_id, mod)
+                    self.applied.add(apk)
+                    applied_count += 1
+                    applied_lines.append(f"`{m.get('time')}`: **{mod:+d}** (impact {imp:.0f})")
+                except Exception as e:
+                    logger.error("apply_modifiers_for_player nq_add_mmr failed (%s, %s): %s",
+                                 player_name, mk, e)
+
+            save_state(self.processed, self.backfilled, self.applied)
+
+            # Staff-log summary (only if something happened).
+            if applied_lines or skipped:
+                summary = (f"🔗 **{player_name}** (`{discord_id}`) linked — "
+                           f"applied modifier to **{applied_count}** match(es), "
+                           f"{skipped} already applied, {len(targets) - applied_count - skipped} no impact data.")
+                detail = "\n".join(applied_lines) if applied_lines else "_(none — all already applied or no impact data)_"
+                embed = discord.Embed(
+                    title="🎯 Per-player MMR backfill",
+                    description=summary,
+                    color=0x2ECC71 if applied_count else 0xF1C40F)
+                embed.add_field(name="Matches", value=detail[:1024], inline=False)
+                await core.send_staff_log(self.bot, embed=embed)
+            logger.info("apply_modifiers_for_player(%s): %d applied, %d skipped.",
+                        player_name, applied_count, skipped)
+        except Exception as e:
+            logger.error("apply_modifiers_for_player(%s) failed: %s", player_name, e, exc_info=True)
 
 
 async def setup(bot):

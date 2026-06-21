@@ -148,7 +148,16 @@ class Registration(commands.Cog):
             
             async with core.airtable_lock:
                 linked_count = await asyncio.to_thread(core.relink_records, ign_name, player_record_id)
-                
+
+            # If past records were linked, backfill this player's MMR modifier for
+            # matches where they were previously unmatched. Runs in background so
+            # /ign doesn't block.
+            if linked_count > 0:
+                mmr_cog = self.bot.get_cog("MMRModifier")
+                if mmr_cog:
+                    asyncio.create_task(
+                        mmr_cog.apply_modifiers_for_player(str(interaction.user.id), ign_name))
+
             role_granted = await self._grant_registered_role(interaction)
 
             msg = f"**{discord_handle}**'s in-game name (**{ign_name}**) has been registered!\n"

@@ -267,6 +267,24 @@ class Ingest(commands.Cog):
                 self.bot,
                 content=f"🔗 Staff **{interaction.user.name}** linked `{mode}` record `{record_id}` (`{raw_ign}`) to player **{player_name}**."
             )
+
+            # After linking, backfill this player's MMR modifier for past matches
+            # where they were previously unmatched. Runs in background so /link
+            # doesn't block. Resolves discord_id from the member if given, else
+            # from Airtable.
+            mmr_cog = self.bot.get_cog("MMRModifier")
+            if mmr_cog:
+                target_did = str(member.id) if member else None
+                if not target_did:
+                    # member wasn't given; look up Discord ID from the player record
+                    try:
+                        pr = await asyncio.to_thread(
+                            core.players_table.get, player_record_id)
+                        target_did = str((pr.get("fields") or {}).get("Discord ID") or "") or None
+                    except Exception:
+                        target_did = None
+                if target_did:
+                    asyncio.create_task(mmr_cog.apply_modifiers_for_player(target_did, player_name))
             
         except Exception as e:
             logger.error("Error linking record %s: %s", record_id, e, exc_info=True)
