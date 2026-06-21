@@ -282,6 +282,33 @@ class SelfRoles(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    @commands.Cog.listener()
+    async def on_member_update(self, before: discord.Member, after: discord.Member):
+        """Auto-strip the [TAG] nickname prefix when the Champs role is removed,
+        so staff can just take the role in Discord and the nickname cleans up too.
+        This is the safety net behind /clearteam (which does all three at once).
+        Only fires on role removal — adding the role still goes through the team
+        picker which sets the tag explicitly."""
+        if before.roles == after.roles:
+            return  # no role change
+        guild = after.guild
+        if guild is None:
+            return
+        champs = await _get_champs_role(guild)
+        if champs is None or not core.CHAMPS_ROLE_ID:
+            return
+        had_champs = champs in before.roles
+        has_champs = champs in after.roles
+        if had_champs and not has_champs:
+            # Champs role was removed — clean the tag if present.
+            if _TAG_RE.search(after.display_name):
+                try:
+                    nick_msg = await _apply_tag(after, "")
+                    logger.info("Auto-stripped team tag from %s after Champs removal.%s",
+                                after.name, nick_msg)
+                except Exception as e:
+                    logger.error("Auto-strip tag failed for %s: %s", after.name, e)
+
     @app_commands.command(name="rolepanel",
                           description="Post the self-roles (region / weapon / team) panel in this channel (staff only).")
     async def rolepanel(self, interaction: discord.Interaction):
@@ -301,6 +328,47 @@ class SelfRoles(commands.Cog):
         )
         await interaction.channel.send(embed=embed, view=SelfRolePanel())
         await interaction.response.send_message("✅ Self-roles panel posted.", ephemeral=True)
+
+    @app_commands.command(name="clearteam",
+                          description="Strip a player's team: removes Champs role, clears Airtable Team, and removes the [TAG] nickname prefix (staff only).")
+    @app_commands.describe(member="The member whose team membership to clear")
+    async def clearteam(self, interaction: discord.Interaction, member: discord.Member):
+        if not is_staff(interaction):
+            await interaction.response.send_message("❌ Staff only.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        summary = []
+
+        # 1. Remove the Champs role.
+        champs = await _get_champs_role(guild)
+        if champs and champs in member.roles:
+            try:
+                await member.remove_roles(champs, reason=f"CQ /clearteam by {interaction.user.name}")
+                summary.append("stripped **Champs** role")
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "❌ Missing permission to remove roles (check bot role hierarchy).", ephemeral=True)
+                return
+
+        # 2. Clear the Airtable Team link.
+        try:
+            await asyncio.to_thread(core.set_player_team, str(member.id), None, member.name)
+            summary.append("cleared Airtable **Team**")
+        except Exception as e:
+            logger.error("clearteam set_player_team failed for %s: %s", member.id, e)
+
+        # 3. Remove the [TAG] prefix from the nickname.
+        nick_msg = await _apply_tag(member, "")
+        if nick_msg == "":
+            summary.append("removed **[TAG]** nickname prefix")
+
+        done = ", ".join(summary) if summary else "nothing to clear (no Champs role, no team, no tag)"
+        await interaction.followup.send(
+            f"✅ **{member.display_name}** — {done}.{nick_msg}", ephemeral=True)
+        await core.send_staff_log(
+            self.bot,
+            content=f"🧹 Staff **{interaction.user.name}** cleared team for **{member.name}** ({member.id}): {done}.")
 
 
 async def setup(bot):

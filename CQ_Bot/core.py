@@ -35,6 +35,10 @@ PLACEMENT_GAMES = int(os.getenv('PLACEMENT_GAMES', '5'))
 SEASON_CACHE_TTL = int(os.getenv('SEASON_CACHE_TTL', '600'))  # seconds; season aggregation cache
 VERIFIED_ROLE_NAME = os.getenv('VERIFIED_ROLE_NAME', 'Verified Player')
 WEEKLY_LEADERBOARD_CHANNEL_ID = int(os.getenv('WEEKLY_LEADERBOARD_CHANNEL_ID', '0'))  # 0 = staff logs channel
+# Public channel to mirror MMR modifier summaries (player-facing). 0 = disabled.
+# Staff-logs still receives the full detailed report; this channel gets a compact
+# "who got what" summary so players can see the impact-based adjustments.
+MMR_PUBLIC_CHANNEL_ID = int(os.getenv('MMR_PUBLIC_CHANNEL_ID', '0'))
 
 # --- NeatQueue API (Phase 7: Impact-based MMR modifier) ---
 NEATQUEUE_TOKEN = os.getenv('NEATQUEUE_TOKEN', '')

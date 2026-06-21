@@ -276,7 +276,33 @@ class MMRModifier(commands.Cog):
             color=0xF1C40F if core.MMR_MODIFIER_DRYRUN else 0x2ECC71
         )
         embed.add_field(name="Modifiers", value="\n".join(lines)[:1024], inline=False)
+
+        # Mirror a compact, player-facing summary to the public channel (if set).
+        # Only when modifiers were actually applied (not dry-run), so the public
+        # channel never shows "DRY-RUN" noise. Staff-logs still gets the full embed.
+        if not core.MMR_MODIFIER_DRYRUN and core.MMR_PUBLIC_CHANNEL_ID and lines:
+            await self._mirror_to_public(m, lines)
+
         return embed
+
+    async def _mirror_to_public(self, m, lines):
+        """Post a compact, player-facing modifier summary to the public channel.
+        Failures are logged but never break the modifier pipeline."""
+        try:
+            channel = self.bot.get_channel(core.MMR_PUBLIC_CHANNEL_ID)
+            if channel is None:
+                return
+            public = discord.Embed(
+                title="📊 Performance MMR Adjustments",
+                description=(f"Match `{m.get('time')}` — impact-based adjustments applied "
+                             f"on top of the base win/loss MMR:"),
+                color=0x2ECC71)
+            public.add_field(name="Adjustments", value="\n".join(lines)[:1024], inline=False)
+            public.set_footer(text="Well-played games earn bonus MMR · poor play loses extra")
+            public.timestamp = datetime.now(timezone.utc)
+            await channel.send(embed=public)
+        except Exception as e:
+            logger.error("Failed to mirror modifier summary to public channel: %s", e)
 
     # ---------- staff command ----------
 
