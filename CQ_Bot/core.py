@@ -53,6 +53,14 @@ MMR_MODIFIER_DRYRUN = os.getenv('MMR_MODIFIER_DRYRUN', '1') == '1'  # 1 = report
 # ID takes priority over name (avoids creating a duplicate role); name is the fallback.
 CHAMPS_ROLE_ID = int(os.getenv('CHAMPS_ROLE_ID', '1515951370987896852'))
 CHAMPS_ROLE_NAME = os.getenv('CHAMPS_ROLE_NAME', 'Champs')
+# --- Registration help (cogs/registration.py) ---
+# Channel that hosts the persistent "how to register" guide panel (#ign). The
+# auto-helper also replies here (or in the queue channels) when NeatQueue rejects
+# a player for lacking the Registered role. 0 = feature disabled.
+IGN_HELP_CHANNEL_ID = int(os.getenv('IGN_HELP_CHANNEL_ID', '0'))
+# NeatQueue's bot user id — used by the auto-helper to recognize NeatQueue's
+# "not registered" rejection messages. 0 = fall back to name matching.
+NEATQUEUE_BOT_ID = int(os.getenv('NEATQUEUE_BOT_ID', '0'))
 # 1 = bot auto-creates any missing region/weapon/champs role on first use.
 SELFROLES_AUTO_CREATE = os.getenv('SELFROLES_AUTO_CREATE', '1') == '1'
 # Region options for the single-select menu. Labels MUST match the Airtable Players.Region
