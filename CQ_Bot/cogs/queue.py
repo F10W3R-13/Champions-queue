@@ -507,6 +507,12 @@ class Queue(commands.Cog):
             # so the "queue is open" announcement is never ahead of the actual unlock.
             msg_ok = await self._send_reminder(phase_key, state, date_str)
             unlock_ok = await self._call_lock(locked=False, window_key=window["key"])
+            # After the queue is actually open, DM the RSVP roster so reserved
+            # players get a head start. Never let a DM failure block the LIVE phase.
+            try:
+                await self._dm_rsvp_roster(state, date_str)
+            except Exception as e:
+                logger.error("RSVP DM step failed (non-fatal): %s", e)
             return msg_ok and unlock_ok
 
         # ---- Reminder phases (t2h, t30): unified embed + optional ping ----
@@ -548,6 +554,52 @@ class Queue(commands.Cog):
         except Exception as e:
             logger.error("Failed to post %s reminder: %s", phase_key, e)
             return False
+
+    async def _dm_rsvp_roster(self, state, date_str):
+        """DM everyone on the shared RSVP roster for this date to tell them the
+        queue is now open. This gives RSVP'd players a head start over people who
+        only see the channel ping — softening (not eliminating) the 'seat stolen'
+        problem, since the bot can't reserve slots in NeatQueue.
+
+        DM failures (closed DMs, blocked) are logged but never abort the LIVE
+        phase — the queue is open regardless. A per-user cap of one DM per date
+        prevents duplicate pings if both NA and EU live phases fire same day."""
+        rsvp_ids = _rsvp_list(state, date_str)
+        if not rsvp_ids:
+            return 0
+        already_dmd = set(state.setdefault("live_dmed", {}).get(date_str, []))
+        targets = [uid for uid in rsvp_ids if uid not in already_dmd]
+        if not targets:
+            return 0
+
+        join_ch = self.bot.get_channel(core.QUEUE_JOIN_CHANNEL_ID)
+        join_mention = join_ch.mention if join_ch else f"<#{core.QUEUE_JOIN_CHANNEL_ID}>"
+        guild = self.bot.get_guild(int(core.GUILD_ID)) if core.GUILD_ID else None
+
+        sent = 0
+        for uid in targets:
+            member = guild.get_member(int(uid)) if guild else None
+            if member is None:
+                continue
+            try:
+                await member.send(
+                    f"🔴 **The queue is now open!**\n\n"
+                    f"You reserved a spot — head to {join_mention} and press "
+                    f"**Join Queue** now to lock it in. "
+                    f"Reserved players get this heads-up before the channel ping.\n\n"
+                    f"*This is a courtesy nudge, not a guaranteed slot — first to press "
+                    f"Join Queue gets in.*")
+                sent += 1
+            except discord.Forbidden:
+                logger.info("RSVP DM to %s skipped — DMs closed.", uid)
+            except Exception as e:
+                logger.warning("RSVP DM to %s failed: %s", uid, e)
+
+        # Record who we DMed so the other window's live phase doesn't re-DM them.
+        state.setdefault("live_dmed", {}).setdefault(date_str, []).extend(targets)
+        logger.info("RSVP LIVE DM sent to %d/%d reserved players for %s.",
+                    sent, len(targets), date_str)
+        return sent
 
     # ---------- manual staff trigger ----------
 
