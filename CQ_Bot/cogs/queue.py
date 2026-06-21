@@ -351,6 +351,41 @@ class Queue(commands.Cog):
             self.reminder_loop.start()
             logger.info("Queue reminder loop started.")
 
+    # ---------- manual /unlock /lock detection ----------
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction):
+        """Detect staff running NeatQueue's native /unlock or /lock slash command
+        in a queue channel, so the bot can protect a manually-opened queue from
+        being overwritten by the scheduled auto-lock.
+
+        We catch the interaction itself (not NeatQueue's ephemeral response, which
+        we can't see) by inspecting command_name. This is independent of NeatQueue's
+        response format and works whether or not the response is ephemeral."""
+        try:
+            cmd = getattr(interaction, "command_name", None)
+        except Exception:
+            return
+        if cmd not in ("unlock", "lock"):
+            return
+        # Only watch the configured queue channels.
+        watch = {core.QUEUE_JOIN_CHANNEL_ID, core.NEATQUEUE_QUEUE_CHANNEL_ID}
+        if interaction.channel_id not in watch:
+            return
+        try:
+            state = await asyncio.to_thread(_load_state)
+            if cmd == "unlock":
+                state["manual_open"] = True
+                state["manual_open_since"] = datetime.now(timezone.utc).isoformat()
+            else:  # lock
+                state["manual_open"] = False
+                state.pop("manual_open_since", None)
+            await asyncio.to_thread(_save_state, state)
+            logger.info("Manual /%s detected via on_interaction — manual_open=%s",
+                        cmd, state["manual_open"])
+        except Exception as e:
+            logger.error("Failed to record manual /%s: %s", cmd, e)
+
     # ---------- channel resolution ----------
 
     def _reminder_channel(self):
@@ -411,6 +446,39 @@ class Queue(commands.Cog):
                             state["fired"].append(fkey)  # don't retry; union resolved it
                             dirty = True
                             continue
+
+                        # MANUAL OPEN guard: if staff ran /unlock manually, don't let the
+                        # scheduled auto-lock overwrite their open. Honor it for up to 24h,
+                        # after which we expire the flag (safety net for forgotten opens).
+                        if state.get("manual_open"):
+                            since = state.get("manual_open_since")
+                            expired = True
+                            if since:
+                                try:
+                                    since_dt = datetime.fromisoformat(since.rstrip("Z"))
+                                    expired = (now_utc - since_dt) >= timedelta(hours=24)
+                                except Exception:
+                                    expired = True
+                            if expired:
+                                logger.info("Manual open expired (>24h since %s) — proceeding with auto-lock.",
+                                            since)
+                                state["manual_open"] = False
+                                state.pop("manual_open_since", None)
+                                dirty = True
+                            else:
+                                logger.info("Auto-lock skipped — queue was manually opened at %s. Staying open until /lock.",
+                                            since)
+                                state["fired"].append(fkey)  # don't retry; honor manual open
+                                dirty = True
+                                continue
+
+                    # NEW: clear manual_open when a new scheduled session starts, so a
+                    # manual open from yesterday doesn't suppress today's auto-lock.
+                    if phase_key == "live" and state.get("manual_open"):
+                        logger.info("New scheduled session starting — clearing manual_open flag.")
+                        state["manual_open"] = False
+                        state.pop("manual_open_since", None)
+                        dirty = True
 
                     fired_ok = await self._post_phase(window, phase_key, state, date_str)
                     # Only mark as fired if the action actually succeeded — this is
