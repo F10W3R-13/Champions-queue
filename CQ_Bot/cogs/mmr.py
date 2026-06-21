@@ -129,7 +129,8 @@ class MMRModifier(commands.Cog):
         """Returns (match_time, {discord_id: mmr_change}) or (None, None) if unusable."""
         try:
             mtime = datetime.strptime(m["time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        except (KeyError, ValueError):
+        except (KeyError, ValueError, TypeError):
+            # KeyError: missing 'time'; ValueError: bad format; TypeError: 'time' is None.
             return None, None
         changes = {}
         for team in (m.get("teams") or []):
