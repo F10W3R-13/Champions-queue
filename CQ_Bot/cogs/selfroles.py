@@ -330,7 +330,7 @@ class SelfRoles(commands.Cog):
         await interaction.response.send_message("✅ Self-roles panel posted.", ephemeral=True)
 
     @app_commands.command(name="clearteam",
-                          description="Strip a player's team: removes Champs role, clears Airtable Team, and removes the [TAG] nickname prefix (staff only).")
+                          description="Strip a player's team: Champs role + Airtable Team + [TAG] nickname (staff only).")
     @app_commands.describe(member="The member whose team membership to clear")
     async def clearteam(self, interaction: discord.Interaction, member: discord.Member):
         if not is_staff(interaction):

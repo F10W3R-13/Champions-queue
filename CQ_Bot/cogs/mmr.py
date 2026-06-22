@@ -271,7 +271,7 @@ class MMRModifier(commands.Cog):
         embed = discord.Embed(
             title="🎯 Impact MMR Modifier",
             description=(f"Match `{m.get('time')}` • queue `{m.get('game', '?')}`\n"
-                         f"Impact {lo:g}→−{cap:g} … {hi:g}→+{cap:g} (neutral {mid:g}) • "
+                         f"Impact {lo:g}→−{cap:g} … {hi:g}→+{cap:g} (neutral {(lo+hi)/2:g}) • "
                          f"{len(player_imp)}/{len(changes)} with data\nMode: **{mode}**"),
             color=0xF1C40F if core.MMR_MODIFIER_DRYRUN else 0x2ECC71
         )
