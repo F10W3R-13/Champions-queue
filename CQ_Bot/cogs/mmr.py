@@ -262,8 +262,16 @@ class MMRModifier(commands.Cog):
                     # Record per-(player, match) so a later /link backfill skips this combo.
                     self.applied.add(_applied_key(did, mk))
                 except Exception as e:
-                    applied = f" ⚠ failed: {e}"
-                    logger.error("nq_add_mmr failed for %s: %s", did, e)
+                    msg = str(e)
+                    if "not found" in msg.lower():
+                        # NeatQueue has no player record for this user (never queued, or
+                        # cleaned up). This is permanent for this match — not a transient
+                        # error, so downgrade from ERROR to INFO to avoid log noise.
+                        applied = " ⏭ not in NQ"
+                        logger.info("nq_add_mmr skipped %s in match %s — not in NeatQueue DB.", did, mk)
+                    else:
+                        applied = f" ⚠ failed: {e}"
+                        logger.error("nq_add_mmr failed for %s: %s", did, e)
             sign = "+" if mod >= 0 else ""
             wl = "W" if changes.get(did, 0) > 0 else "L"
             lines.append(f"`{sign}{mod:>5}` **{ign}** ({wl}, impact {imp:.0f}){applied}")
