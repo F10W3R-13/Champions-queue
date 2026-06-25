@@ -30,6 +30,12 @@ MATCH_WINDOW_HOURS = 4      # screenshots for a match must be posted within this
 # the modifier sees no data.
 MATCH_WINDOW_LOOKBACK = 2
 MAX_MATCH_AGE_HOURS = 48    # ignore matches older than this (startup backlog guard)
+# When a player has multiple impact records in a window (because two close
+# NeatQueue matches have overlapping windows AND the player played in both),
+# only cluster the records from the SAME series. Games within one Bo3 are
+# typically posted 30-90 min apart; a record farther than this from the match
+# mtime belongs to a different match and must not pollute the average.
+SERIES_CLUSTER_MINUTES = 30
 
 
 def snowflake_dt(message_id):
@@ -87,9 +93,27 @@ def compute_modifier(impact):
     return int(round((imp_clamped - mid) / half * cap))
 
 
-def impacts_in_window(start_dt, end_dt):
-    """{player_record_id: [impact, ...]} from HP+SND records posted in the window. (sync)"""
+def impacts_in_window(start_dt, end_dt, participant_pids=None, target_mtime=None):
+    """{player_record_id: [impact, ...]} from HP+SND records posted in the window. (sync)
+
+    Two optional disambiguators prevent cross-match contamination when windows
+    overlap (two NeatQueue matches within ~6h of each other):
+
+    - participant_pids: if given (a set of Airtable player record ids), only
+      records belonging to players in THIS match are returned. A player who
+      appeared in a neighbouring match but not this one is excluded.
+    - target_mtime: if given, a player's records are clustered to the SAME
+      series — only those whose snowflake time is within SERIES_CLUSTER_MINUTES
+      of target_mtime are kept. This drops a participant's records that actually
+      belong to a different (nearby) match, so their impact isn't averaged with
+      the wrong game.
+
+    With neither argument the behaviour is identical to the original (whole-
+    window scan), preserving the per-player backfill's single-player use case.
+    """
     out = {}
+    # pid -> list of (impact, timestamp) so we can cluster after collecting.
+    raw = {}
     formula = "AND({Season} = '%s', {Player} != '')" % core.CURRENT_SEASON.replace("'", "")
     for table in (core.hp_table, core.snd_table):
         for rec in table.all(formula=formula, fields=["Player", "Impact", "Match ID"]):
@@ -106,7 +130,17 @@ def impacts_in_window(start_dt, end_dt):
             if not (start_dt <= ts <= end_dt):
                 continue
             pid = players[0]["id"] if isinstance(players[0], dict) else players[0]
-            out.setdefault(pid, []).append(float(imp))
+            if participant_pids is not None and pid not in participant_pids:
+                continue
+            raw.setdefault(pid, []).append((float(imp), ts))
+
+    cluster = timedelta(minutes=SERIES_CLUSTER_MINUTES)
+    for pid, pairs in raw.items():
+        if target_mtime is not None and len(pairs) > 1:
+            # Keep only records from the same series as the closest one to mtime.
+            closest = min(pairs, key=lambda it: abs((it[1] - target_mtime).total_seconds()))
+            pairs = [p for p in pairs if abs((p[1] - closest[1]).total_seconds()) <= cluster.total_seconds()]
+        out[pid] = [imp for imp, _ts in pairs]
     return out
 
 
@@ -191,7 +225,23 @@ class MMRModifier(commands.Cog):
                 self.processed.add(key)  # cancelled / tie - nothing to modify
                 continue
 
-            result = await self.apply_modifiers_for_match(m, mtime, changes)
+            try:
+                result = await self.apply_modifiers_for_match(m, mtime, changes)
+            except Exception as e:
+                # A single match must never abort the whole pass — otherwise the
+                # failure isn't marked `processed`, so the NEXT pass re-runs the
+                # same match and re-applies every modifier (double/MMR-spike bug).
+                # The applied-set guards against a true double-apply now, but we
+                # still mark this match processed so one bad payload can't wedge
+                # the loop forever.
+                logger.error("apply_modifiers_for_match crashed for match %s: %s", key, e, exc_info=True)
+                await core.send_staff_log(
+                    self.bot,
+                    content=(f"⚠️ MMR modifier crashed processing match at `{m.get('time')}` "
+                             f"({key}): `{e}`. Marking processed to avoid a re-process loop; "
+                             f"per-(player,match) `applied` set prevents any double-apply."))
+                self.processed.add(key)
+                continue
             if result == "retry":
                 # OCR data not ready yet — do NOT mark as processed; retry next pass.
                 # The 48h max-age guard (above) is the eventual backstop.
@@ -213,9 +263,16 @@ class MMRModifier(commands.Cog):
         # hours to catch game-1/game-2 screenshots, then forward 4h for late posts.
         window_start = mtime - timedelta(hours=MATCH_WINDOW_LOOKBACK)
         window_end = mtime + timedelta(hours=MATCH_WINDOW_HOURS)
-        impacts = await asyncio.to_thread(impacts_in_window, window_start, window_end)
         did_map = await asyncio.to_thread(core.discord_id_map)          # discord_id -> pid
         directory = await asyncio.to_thread(core.player_directory_cached)  # pid -> (ign, handle)
+        # Restrict the impact scan to this match's actual participants (by Airtable
+        # player record id) and cluster records to the same series. Without this,
+        # overlapping windows between two close matches let one match's impact data
+        # contaminate the other's average.
+        participant_pids = {did_map[did] for did in changes if did in did_map}
+        impacts = await asyncio.to_thread(
+            impacts_in_window, window_start, window_end,
+            participant_pids=participant_pids or None, target_mtime=mtime)
 
         # average impact per discord id (only players in this match)
         player_imp = {}
@@ -246,23 +303,32 @@ class MMRModifier(commands.Cog):
             pid = did_map.get(did)
             ign = directory.get(pid, ("?", ""))[0] if pid else "?"
             applied = ""
+            apk = _applied_key(did, mk)
             if mod and not core.MMR_MODIFIER_DRYRUN:
-                try:
-                    await asyncio.to_thread(core.nq_add_mmr, did, mod)
-                    applied = " ✔"
-                    # Record per-(player, match) so a later /link backfill skips this combo.
-                    self.applied.add(_applied_key(did, mk))
-                except Exception as e:
-                    msg = str(e)
-                    if "not found" in msg.lower():
-                        # NeatQueue has no player record for this user (never queued, or
-                        # cleaned up). This is permanent for this match — not a transient
-                        # error, so downgrade from ERROR to INFO to avoid log noise.
-                        applied = " ⏭ not in NQ"
-                        logger.info("nq_add_mmr skipped %s in match %s — not in NeatQueue DB.", did, mk)
-                    else:
-                        applied = f" ⚠ failed: {e}"
-                        logger.error("nq_add_mmr failed for %s: %s", did, e)
+                if apk in self.applied:
+                    # Already applied to this (player, match) — e.g. a previous pass
+                    # crashed mid-way (see process_new_matches try/except) but had
+                    # already sent the nq_add_mmr call. Skip to avoid double-applying.
+                    applied = " ⊙ already applied"
+                else:
+                    try:
+                        await asyncio.to_thread(core.nq_add_mmr, did, mod)
+                        applied = " ✔"
+                        # Record per-(player, match) so a later /link backfill — or a
+                        # re-process of this match after a mid-pipeline crash — skips
+                        # this combo and never double-applies.
+                        self.applied.add(apk)
+                    except Exception as e:
+                        msg = str(e)
+                        if "not found" in msg.lower():
+                            # NeatQueue has no player record for this user (never queued, or
+                            # cleaned up). This is permanent for this match — not a transient
+                            # error, so downgrade from ERROR to INFO to avoid log noise.
+                            applied = " ⏭ not in NQ"
+                            logger.info("nq_add_mmr skipped %s in match %s — not in NeatQueue DB.", did, mk)
+                        else:
+                            applied = f" ⚠ failed: {e}"
+                            logger.error("nq_add_mmr failed for %s: %s", did, e)
             sign = "+" if mod >= 0 else ""
             wl = "W" if changes.get(did, 0) > 0 else "L"
             lines.append(f"`{sign}{mod:>5}` **{ign}** ({wl}, impact {imp:.0f}){applied}")
@@ -442,21 +508,28 @@ class MMRModifier(commands.Cog):
             applied_lines = []
             applied_count = 0
             skipped = 0
+            dryrun_count = 0
+            no_data = 0
             for mtime, mk, m in targets:
                 apk = _applied_key(discord_id, mk)
                 if apk in self.applied:
                     skipped += 1
                     continue
                 # Look up this player's impact in the match's time window (same
-                # method as the per-match loop — look back + forward window average.
+                # method as the per-match loop — look back + forward window average,
+                # scoped to this player and clustered to this match's series so a
+                # nearby match the same player was in can't contaminate the average.
                 window_start = mtime - timedelta(hours=MATCH_WINDOW_LOOKBACK)
                 window_end = mtime + timedelta(hours=MATCH_WINDOW_HOURS)
-                impacts = await asyncio.to_thread(impacts_in_window, window_start, window_end)
+                impacts = await asyncio.to_thread(
+                    impacts_in_window, window_start, window_end,
+                    participant_pids={pid}, target_mtime=mtime)
                 imp_list = impacts.get(pid)
                 if not imp_list:
                     # Player still has no impact data (screenshots not posted or
                     # still unmatched). Skip without marking applied — retryable
                     # on the next link/registration event.
+                    no_data += 1
                     continue
                 imp = sum(imp_list) / len(imp_list)
                 mod = compute_modifier(imp)
@@ -464,7 +537,11 @@ class MMRModifier(commands.Cog):
                     self.applied.add(apk)  # neutral; record so we don't recompute
                     continue
                 if core.MMR_MODIFIER_DRYRUN:
-                    self.applied.add(apk)
+                    # Do NOT stamp `applied`: nothing was actually written to
+                    # NeatQueue, so a later LIVE run (or the per-match loop) must
+                    # still be free to apply it. Marking it here would silently
+                    # drop this (player, match) forever once dry-run ends.
+                    dryrun_count += 1
                     applied_lines.append(f"`{m.get('time')}`: dry-run (would be {mod:+d})")
                     continue
                 try:
@@ -480,9 +557,12 @@ class MMRModifier(commands.Cog):
 
             # Staff-log summary (only if something happened).
             if applied_lines or skipped:
-                summary = (f"🔗 **{player_name}** (`{discord_id}`) linked — "
-                           f"applied modifier to **{applied_count}** match(es), "
-                           f"{skipped} already applied, {len(targets) - applied_count - skipped} no impact data.")
+                bits = [f"applied to **{applied_count}**"]
+                if dryrun_count:
+                    bits.append(f"{dryrun_count} dry-run")
+                bits.append(f"{skipped} already applied")
+                bits.append(f"{no_data} no impact data")
+                summary = (f"🔗 **{player_name}** (`{discord_id}`) linked — " + ", ".join(bits) + ".")
                 detail = "\n".join(applied_lines) if applied_lines else "_(none — all already applied or no impact data)_"
                 embed = discord.Embed(
                     title="🎯 Per-player MMR backfill",
@@ -490,8 +570,8 @@ class MMRModifier(commands.Cog):
                     color=0x2ECC71 if applied_count else 0xF1C40F)
                 embed.add_field(name="Matches", value=detail[:1024], inline=False)
                 await core.send_staff_log(self.bot, embed=embed)
-            logger.info("apply_modifiers_for_player(%s): %d applied, %d skipped.",
-                        player_name, applied_count, skipped)
+            logger.info("apply_modifiers_for_player(%s): %d applied, %d dry-run, %d skipped, %d no data.",
+                        player_name, applied_count, dryrun_count, skipped, no_data)
         except Exception as e:
             logger.error("apply_modifiers_for_player(%s) failed: %s", player_name, e, exc_info=True)
 

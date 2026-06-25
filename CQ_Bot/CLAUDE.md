@@ -3,7 +3,7 @@
 > **단일 진실 원천 (Single Source of Truth).** 이 파일이 프로젝트의 기준점이다.
 > 다른 문서(IMPROVEMENT_PLAN.md, COMMANDS_GUIDE.md, DEPLOY_GUIDE 등)는 각각 특정 용도(roadmap, 사용자용 복붙, 배포)만 담당하며, 여기와 중복되는 내용이 충돌하면 **이 파일이 우선**이다.
 >
-> **Last updated: 2026-06-25**
+> **Last updated: 2026-06-26**
 
 ---
 
@@ -184,7 +184,9 @@ Champion's Queue/                         # repo root
 - **10분 루프**: NeatQueue history 폴링 → impact 읽기 → modifier 계산 → 적용
 - **Impact 공식**: `modifier = round((impact - 130) / 70 * 10)`, 범위 ±10, impact 60→-10 / 130→0 / 200→+10
 - **시간창**: `[mtime - 2h, mtime + 4h]` (lookback: 시리즈 종료 전 게임별 스크린샷 포함)
+- **겹침 방지 (참가자 필터 + 시리즈 클러스터링)**: 두 매치의 시간창이 겹칠 때 한 선수의 다른-매치 impact가 평균을 왜곡하지 않도록 2단계로 걸러냄. (1) `impacts_in_window(participant_pids=...)` 로 이 매치에 실제 참가하지 않은 선수의 레코드를 배제. (2) `target_mtime` 클러스터링으로 같은 참가자의 레코드 중 가장 가까운 것에서 ±`SERIES_CLUSTER_MINUTES`(30분) 이내만(=같은 Bo3 시리즈) 남김. NeatQueue match ↔ Airtable records 사이에 공유 ID가 없어 시간이 유일한 연결고리이므로, 이 필터로 보완.
 - **재시도**: impact 데이터 없으면 processed에 넣지 않고 10분마다 재시도 (최대 48h)
+- **이중적용 방지 (3중)**: per-match 루프는 적용 전 `applied` 셋(`{did}|{match_key}`) 체크 → `process_new_matches`는 per-match try/except로 1개 매치 크래시가 전체 패스 중단/재진입을 막음 → 매치는 processed 마킹. dry-run일 땐 `applied` 에 쓰지 않음 (LIVE 전환 후 누락 방지).
 - **`/backfillmodifiers`**: dry-run 기간에 누락된 매치 modifier 소급 적용 (match-level `backfilled` 셋)
 - **per-player backfill**: `/link`·`/ign` 후 그 플레이어만 소급 적용 (player+match `applied` 셋)
 - **공개 미러**: `MMR_PUBLIC_CHANNEL_ID`에 플레이어용 요약 게시 (dry-run 아닐 때만)
@@ -248,10 +250,12 @@ python _smoke_test.py                             # 전체 회귀 테스트
 1. **Airtable formula brace**: formula 문자열에서 필드명은 반드시 `{Field}` 중괄호. 누락 시 422.
 2. **`tree.sync()` 재실행**: `on_ready`마다 도므로 재연결 시마다 sync. known minor issue.
 3. **NeatQueue "User not found"**: 매치 history엔 있지만 NeatQueue DB엔 없는 플레이어 → 400 영구 에러, graceful skip.
-4. **Impact 시간창 lookback**: 시리즈 종료(mtime) 전에 올라온 게임별 스크린샷을 잡으려 `[mtime-2h, mtime+4h]` 사용.
+4. **Impact 시간창 lookback + 겹침**: 시리즈 종료(mtime) 전에 올라온 게임별 스크린샷을 잡으려 `[mtime-2h, mtime+4h]` 사용. 단 두 매치 mtime이 가까우면 창이 겹쳐 한 선수의 다른-매치 impact가 평균을 왜곡함 → `impacts_in_window`의 `participant_pids`(참가자 필터) + `target_mtime`(±30분 시리즈 클러스터링)으로 보완. NeatQueue match ↔ Airtable records 간 공유 ID가 없어 시간이 유일한 연결고리임. 회귀 테스트는 `_smoke_test.py` 의 "impact window overlap contamination" 항목.
 5. **NeatQueue value 정수만**: `nq_add_mmr`의 value는 반드시 정수. 소수점 → 422.
 6. **`.env` autodeploy 미전달**: gitignored라 서버 수동 설정 필수. 빠지면 기본값(=dry-run, 채널 폴백)으로 동작.
 7. **`/clearteam` description ≤ 100자**: Discord 제한. 초과 시 `tree.sync()` 전체 실패.
+8. **MMR modifier 이중적용 (회귀 원인)**: `apply_modifiers_for_match`는 `nq_add_mmr` 호출 **직후**에 `self.applied.add()` 로 (player, match) 를 기록하지만, **그 뒤 embed 생성 단계에서 예외가 나면** `process_new_matches`가 중단되어 `processed.add()` 까지 도달 못 함 → 다음 루프가 같은 매치를 재처리. per-match 루프가 `applied` 셋을 **읽지 않았던** 시절에는 같은 선수에게 modifier가 반복 적용되어 MMR이 비정상 급등. **3중 방어**: (a) per-match 루프도 적용 전 `applied` 체크, (b) `process_new_matches`에 per-match try/except로 1개 매치 크래시가 전체 패스 중단을 막음, (c) 매치는 processed 마킹하여 재진입 차단. 회귀 테스트는 `_smoke_test.py` 의 "MMR double-apply regression" 항목.
+9. **MMR dry-run + `applied` 셋 부적절 마킹**: per-player backfill이 dry-run 중에도 `applied.add()` 했던 과거 버그. 실제로는 아무것도 적용하지 않았으므로, 나중에 LIVE 전환 시 그 (player, match) 가 영구 누락됨. **dry-run일 땐 절대 `applied` 에 쓰지 않는다** (neutral `mod==0` 는 예외 — 0은 적용 여부와 무관).
 
 ---
 
@@ -287,7 +291,7 @@ python _smoke_test.py                             # 전체 회귀 테스트
 ## 11. 로드맵
 
 상세는 `IMPROVEMENT_PLAN.md` 참조. 주요 진행 중 항목:
-- Bo3 시리즈별 impact 정확 집계 (현재: 시간창 평균)
-- NeatQueue 매치 ID ↔ OCR 레코드 실제 ID 연결
+- ~~Bo3 시리즈별 impact 정확 집계 (현재: 시간창 평균)~~ → **참가자 필터 + 시리즈 클러스터링(`SERIES_CLUSTER_MINUTES=30`)으로 완화**. 잔여 한계: NeatQueue match ↔ Airtable records 간 공유 ID가 없어 시간 기반 추정에 의존. 매치 간격이 30분 이내인 극단적 케이스는 여전히 분리 불가.
+- NeatQueue 매치 ID ↔ OCR 레코드 실제 ID 연결 (근본 해결: 위 겹침 문제의 완전 제거는 이 연결고리가 있어야 가능)
 - `_smoke_test.py` → pytest 마이그레이션
 - `main.py` sync-once 플래그
