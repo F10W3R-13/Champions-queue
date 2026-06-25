@@ -23,7 +23,7 @@ join via NeatQueue's interactive panel. The count is shown as
 "X reserved · Y to fill the next 10-player lobby", emphasizing the CoD 5v5 /
 multiple-of-10 cliff (unlike F1's soft cap, ours is a hard step).
 
-NeatQueue does NOT expose a "current queue size" read endpoint (verified Phase 0:
+NeatQueue does NOT expose a "current queue size" read endpoint (verified:
 9 candidate GETs all 404), so RSVP is the sole count source. No external coupling.
 
 Patterns reused:
@@ -69,14 +69,6 @@ PHASES = [
 PLAYERS_PER_LOBBY = 10  # CoD 5v5 hard step
 
 FOOTER_PREFIX = "date:"  # embed footer stash marker, e.g. "date:2026-06-20 • CQ Reminder"
-
-
-def is_staff(interaction: discord.Interaction):
-    """Helper to check if a user is staff or admin."""
-    if interaction.user.guild_permissions.administrator:
-        return True
-    roles = [r.name.lower() for r in interaction.user.roles]
-    return any("staff" in r or "admin" in r for r in roles)
 
 
 # ============================ State persistence (mmr.py pattern) ============================
@@ -606,7 +598,7 @@ class Queue(commands.Cog):
     @app_commands.command(name="queuepanel",
                           description="Post the unified RSVP panel now (staff only).")
     async def queue_panel(self, interaction: discord.Interaction):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)

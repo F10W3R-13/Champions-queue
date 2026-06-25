@@ -8,13 +8,6 @@ import core
 
 logger = logging.getLogger("CQ_Bot.ingest")
 
-def is_staff(interaction: discord.Interaction):
-    """Helper to check if a user is staff or admin."""
-    if interaction.user.guild_permissions.administrator:
-        return True
-    roles = [r.name.lower() for r in interaction.user.roles]
-    return any("staff" in r or "admin" in r for r in roles)
-
 class Ingest(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -68,7 +61,7 @@ class Ingest(commands.Cog):
                 % (mode, mp, summary["created"], summary["matched"],
                    summary["review"], summary["unmatched"]))
             
-            # Send review alerts to staff log channel if there are any review items (Phase 2)
+            # Send review alerts to staff log channel if there are any review items
             review_records = [r for r in summary["records"] if r["fields"].get("Status") == core.STATUS_REVIEW]
             if review_records:
                 table_id = core.SND_TABLE_ID if mode == "SND" else core.HP_TABLE_ID
@@ -88,7 +81,7 @@ class Ingest(commands.Cog):
             await message.channel.send(
                 "An error occurred while reading the scoreboard. Re-post the two screenshots in one message, "
                 "or an admin can check the logs.")
-            # Phase 2 staff notification for exceptions
+            # Staff notification for exceptions
             import traceback
             tb = traceback.format_exc()
             await core.send_staff_log(
@@ -112,7 +105,7 @@ class Ingest(commands.Cog):
         refresh the cache eagerly)."""
         try:
             async with core.airtable_lock:
-                # B3: reload matcher cache (TTL-gated) to capture manual Airtable edits
+                # Reload matcher cache (TTL-gated) to capture manual Airtable edits
                 reloaded = await asyncio.to_thread(core.reload_matcher_if_stale)
                 s = await asyncio.to_thread(core.reconcile_once)
             if reloaded or s["matched"] or s["review"]:
@@ -123,7 +116,7 @@ class Ingest(commands.Cog):
 
     @app_commands.command(name="review", description="View recent records that need review.")
     async def review_list(self, interaction: discord.Interaction):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
             
@@ -174,7 +167,7 @@ class Ingest(commands.Cog):
     @app_commands.describe(member="The Discord member to link to")
     @app_commands.describe(ign="Alternatively, the Primary IGN to link to")
     async def link_record(self, interaction: discord.Interaction, record_id: str, member: discord.Member = None, ign: str = None):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
             
@@ -293,7 +286,7 @@ class Ingest(commands.Cog):
     @app_commands.command(name="unlink", description="Unlink a player from a record (resets status to Unmatched).")
     @app_commands.describe(record_id="The Airtable record ID to unlink")
     async def unlink_record(self, interaction: discord.Interaction, record_id: str):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
             
@@ -344,7 +337,7 @@ class Ingest(commands.Cog):
     @app_commands.command(name="reject", description="Mark a record as Unmatched (clears player link).")
     @app_commands.describe(record_id="The Airtable record ID to reject")
     async def reject_record(self, interaction: discord.Interaction, record_id: str):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
             

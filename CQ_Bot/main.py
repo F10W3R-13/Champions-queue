@@ -4,7 +4,7 @@ import logging
 import os
 import asyncio
 
-# Configure logging (Phase 2)
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
@@ -40,7 +40,7 @@ async def on_ready():
     logger.info("Logged in as: %s (%s)", bot.user.name, bot.user.id)
     logger.info("CQ Stats Bot online (registration + stats + OCR ingestion).")
     
-    # Sync Slash Commands (Phase 4)
+    # Sync Slash Commands
     try:
         logger.info("Syncing slash commands...")
         synced = await bot.tree.sync()

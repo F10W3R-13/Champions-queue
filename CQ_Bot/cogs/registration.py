@@ -20,13 +20,6 @@ _NQ_REPLY_CACHE_TTL = 600
 # Resolved lazily from core at handler time so config stays single-source.
 
 
-def is_staff(interaction: discord.Interaction):
-    """Helper to check if a user is staff or admin."""
-    if interaction.user.guild_permissions.administrator:
-        return True
-    roles = [r.name.lower() for r in interaction.user.roles]
-    return any("staff" in r or "admin" in r for r in roles)
-
 
 class Registration(commands.Cog):
     def __init__(self, bot):
@@ -100,7 +93,7 @@ class Registration(commands.Cog):
         await interaction.response.defer(ephemeral=False)
         
         try:
-            # B2: Check duplicate IGN first
+            # Check duplicate IGN first
             if core.check_duplicate_ign(ign_name):
                 await interaction.followup.send(
                     f"❌ **Registration Rejected**: The IGN `{ign_name}` (or a variation of it) is already registered by another player. "
@@ -198,7 +191,7 @@ class Registration(commands.Cog):
                 await interaction.followup.send(f"You are already using that IGN (**{new_ign}**).")
                 return
 
-            # B2: Check duplicate IGN first
+            # Check duplicate IGN first
             if core.check_duplicate_ign(new_ign, exclude_player_id=player_record_id):
                 await interaction.followup.send(
                     f"❌ **Change Rejected**: The IGN `{new_ign}` (or a variation of it) is already registered by another player. "
@@ -231,7 +224,7 @@ class Registration(commands.Cog):
 
     @app_commands.command(name="syncroles", description="Grant the Registered role to all players with a registered IGN (staff only).")
     async def sync_roles(self, interaction: discord.Interaction):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
         if not core.REGISTERED_ROLE_ID:
@@ -278,7 +271,7 @@ class Registration(commands.Cog):
     @app_commands.command(name="ignhelp",
                           description="Post the persistent 'how to register' guide panel (staff only).")
     async def ign_help_panel(self, interaction: discord.Interaction):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
         try:

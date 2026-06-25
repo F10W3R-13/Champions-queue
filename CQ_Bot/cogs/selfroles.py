@@ -34,13 +34,6 @@ ROLE_PERM_ERROR = "❌ Couldn't update your roles. The bot needs **Manage Roles*
 GUILD_ONLY = "This can only be used inside the server."
 
 
-def is_staff(interaction: discord.Interaction) -> bool:
-    if interaction.user.guild_permissions.administrator:
-        return True
-    roles = [r.name.lower() for r in interaction.user.roles]
-    return any("staff" in r or "admin" in r for r in roles)
-
-
 async def _get_or_create_role(guild: discord.Guild, name: str):
     """Find a role by exact name; optionally create it if missing."""
     role = discord.utils.get(guild.roles, name=name)
@@ -312,7 +305,7 @@ class SelfRoles(commands.Cog):
     @app_commands.command(name="rolepanel",
                           description="Post the self-roles (region / weapon / team) panel in this channel (staff only).")
     async def rolepanel(self, interaction: discord.Interaction):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ Staff only.", ephemeral=True)
             return
         embed = discord.Embed(
@@ -333,7 +326,7 @@ class SelfRoles(commands.Cog):
                           description="Strip a player's team: Champs role + Airtable Team + [TAG] nickname (staff only).")
     @app_commands.describe(member="The member whose team membership to clear")
     async def clearteam(self, interaction: discord.Interaction, member: discord.Member):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ Staff only.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)

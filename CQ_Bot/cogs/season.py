@@ -14,13 +14,6 @@ WEEKLY_POST_WEEKDAY = 0
 WEEKLY_POST_HOUR_UTC = 12
 
 
-def is_staff(interaction: discord.Interaction):
-    """Helper to check if a user is staff or admin."""
-    if interaction.user.guild_permissions.administrator:
-        return True
-    roles = [r.name.lower() for r in interaction.user.roles]
-    return any("staff" in r or "admin" in r for r in roles)
-
 
 def _parse_date(s):
     try:
@@ -163,7 +156,7 @@ class Season(commands.Cog):
 
     @app_commands.command(name="weeklyreport", description="Post the weekly advanced-metrics rankings now (staff only).")
     async def weekly_report(self, interaction: discord.Interaction):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
@@ -221,7 +214,7 @@ class Season(commands.Cog):
     @app_commands.command(name="seasonreport", description="Generate season-end standings & awards draft (staff only).")
     @app_commands.describe(season="Season to report on (defaults to the current season)")
     async def season_report(self, interaction: discord.Interaction, season: str = None):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)

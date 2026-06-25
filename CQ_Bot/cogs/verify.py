@@ -23,13 +23,6 @@ logger = logging.getLogger("CQ_Bot.verify")
 ROUTES = ("Referral", "Application", "Credentials")
 
 
-def is_staff(interaction: discord.Interaction) -> bool:
-    if interaction.user.guild_permissions.administrator:
-        return True
-    roles = [r.name.lower() for r in interaction.user.roles]
-    return any("staff" in r or "admin" in r for r in roles)
-
-
 def _norm_route(raw: str) -> str:
     """Best-effort snap of free text to one of the three routes."""
     r = (raw or "").strip().lower()
@@ -110,7 +103,7 @@ class VerifyReviewView(discord.ui.View):
         super().__init__(timeout=None)
 
     async def _finish(self, interaction: discord.Interaction, approved: bool):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ Staff only.", ephemeral=True)
             return
 
@@ -160,7 +153,7 @@ class Verify(commands.Cog):
         name="verifypanel",
         description="Post the access-request panel in this channel (staff only).")
     async def verifypanel(self, interaction: discord.Interaction):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ Staff only.", ephemeral=True)
             return
         embed = discord.Embed(

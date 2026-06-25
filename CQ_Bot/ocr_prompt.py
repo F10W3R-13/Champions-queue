@@ -1,4 +1,4 @@
-# OCR vision prompt (ported verbatim from the validated Make.com pipeline).
+# OCR vision prompt for GPT-4.1.
 # {ROSTER_BLOCK} is replaced at runtime with the layer-1 roster hint.
 
 PROMPT_TEMPLATE = r"""[Role and task]

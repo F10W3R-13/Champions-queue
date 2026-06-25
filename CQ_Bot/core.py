@@ -4,7 +4,6 @@ import json
 import time
 import asyncio
 import logging
-import unicodedata
 from dotenv import load_dotenv
 from pyairtable import Api
 from urllib3.util.retry import Retry
@@ -15,6 +14,15 @@ from ocr_prompt import build_prompt
 
 # 1. Logging Setup
 logger = logging.getLogger("CQ_Bot.core")
+
+
+def is_staff(interaction):
+    """Check if a user is staff or admin. Shared by all cogs (was copy-pasted 7×)."""
+    if interaction.user.guild_permissions.administrator:
+        return True
+    roles = [r.name.lower() for r in interaction.user.roles]
+    return any("staff" in r or "admin" in r for r in roles)
+
 
 # 2. Load environment variables
 load_dotenv()
@@ -40,7 +48,7 @@ WEEKLY_LEADERBOARD_CHANNEL_ID = int(os.getenv('WEEKLY_LEADERBOARD_CHANNEL_ID', '
 # "who got what" summary so players can see the impact-based adjustments.
 MMR_PUBLIC_CHANNEL_ID = int(os.getenv('MMR_PUBLIC_CHANNEL_ID', '0'))
 
-# --- NeatQueue API (Phase 7: Impact-based MMR modifier) ---
+# --- NeatQueue API (Impact-based MMR modifier) ---
 NEATQUEUE_TOKEN = os.getenv('NEATQUEUE_TOKEN', '')
 NEATQUEUE_BASE = "https://api.neatqueue.com"
 GUILD_ID = os.getenv('GUILD_ID', '1512319088146255982')
@@ -220,7 +228,7 @@ def check_duplicate_ign(ign_name, exclude_player_id=None):
 
 def reconcile_once(formula=None):
     """Scan unmatched-only records and correct. (sync - call via to_thread)"""
-    # B1: default to periodic unmatched formula if none is provided
+    # Default to periodic unmatched formula if none is provided
     if formula is None:
         formula = PERIODIC_UNMATCHED_FORMULA
 
@@ -249,7 +257,7 @@ def reconcile_once(formula=None):
                 new_status = STATUS_UNMATCHED
                 update_fields = {"Status": STATUS_UNMATCHED}
 
-            # B1: Skip updating if the Status in Airtable is already the same
+            # Skip updating if the Status in Airtable is already the same
             if f.get("Status") == new_status:
                 continue
 
@@ -405,7 +413,7 @@ def ingest_match(data, match_id, date_str):
             fuzzy_autos.append((ign, pid))
         stats["created"] += 1
 
-    # B4: Batch create player records to minimize API calls
+    # Batch create player records to minimize API calls
     if records_to_create:
         created_records = table.batch_create(records_to_create, typecast=True)
         stats["records"] = created_records
@@ -528,7 +536,7 @@ import requests as _rq
 
 
 def _nq_headers():
-    # NeatQueue expects the RAW token in Authorization (no "Bearer" prefix) - verified 7-1
+    # NeatQueue expects the RAW token in Authorization (no "Bearer" prefix)
     return {"Authorization": NEATQUEUE_TOKEN, "Content-Type": "application/json"}
 
 

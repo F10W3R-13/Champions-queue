@@ -1,4 +1,4 @@
-"""Phase 7 — Impact-based MMR modifier.
+"""Impact-based MMR modifier.
 
 NeatQueue applies its own base win/loss MMR. This cog adds a performance modifier
 on top (default ±10), scaled from each player's absolute Impact score: Impact
@@ -14,7 +14,6 @@ from discord import app_commands
 import logging
 import asyncio
 import json
-import os
 from datetime import datetime, timezone, timedelta
 
 import core
@@ -31,14 +30,6 @@ MATCH_WINDOW_HOURS = 4      # screenshots for a match must be posted within this
 # the modifier sees no data.
 MATCH_WINDOW_LOOKBACK = 2
 MAX_MATCH_AGE_HOURS = 48    # ignore matches older than this (startup backlog guard)
-MIN_PLAYERS_WITH_DATA = 6   # need impact data for at least this many of the 10 players
-
-
-def is_staff(interaction: discord.Interaction):
-    if interaction.user.guild_permissions.administrator:
-        return True
-    roles = [r.name.lower() for r in interaction.user.roles]
-    return any("staff" in r or "admin" in r for r in roles)
 
 
 def snowflake_dt(message_id):
@@ -316,7 +307,7 @@ class MMRModifier(commands.Cog):
 
     @app_commands.command(name="applymodifiers", description="Process new NeatQueue matches for Impact MMR modifiers now (staff only).")
     async def apply_now(self, interaction: discord.Interaction):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
         if not core.NEATQUEUE_TOKEN:
@@ -338,7 +329,7 @@ class MMRModifier(commands.Cog):
                           description="Re-apply MMR modifiers to recent processed matches (staff only).")
     @app_commands.describe(count="Number of recent processed matches to backfill (1-20, default 2).")
     async def backfill_modifiers(self, interaction: discord.Interaction, count: int = 2):
-        if not is_staff(interaction):
+        if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
         if not core.NEATQUEUE_TOKEN:
