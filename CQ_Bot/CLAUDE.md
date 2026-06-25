@@ -1,120 +1,293 @@
-# CLAUDE.md — Agent Context for CQ_Bot
+# CLAUDE.md — Champion's Queue Bot
 
-> Read this first. It replaces the need to re-scan every file.
-> Last updated: 2026-06-19 (autodeploy + Make retirement + reconcile optimization + doc sync).
+> **단일 진실 원천 (Single Source of Truth).** 이 파일이 프로젝트의 기준점이다.
+> 다른 문서(IMPROVEMENT_PLAN.md, COMMANDS_GUIDE.md, DEPLOY_GUIDE 등)는 각각 특정 용도(roadmap, 사용자용 복붙, 배포)만 담당하며, 여기와 중복되는 내용이 충돌하면 **이 파일이 우선**이다.
 >
-> **새 세션 에이전트는 먼저 `../HANDOFF.md`를 읽을 것** — 최신 세션 진행 상황, 결정, 코드 변경 내역, 다음 작업이 정리되어 있음.
+> **Last updated: 2026-06-25**
 
-## What this is
+---
 
-Discord stats bot for **Champion's Queue** — an invite-only CODM ranked community
-(Guild `1512319088146255982`). Players post 2 scoreboard screenshots in #results →
-GPT-4.1 vision OCR → fuzzy IGN matching → Airtable. NeatQueue (3rd-party bot) handles
-queues/MMR; this bot handles identity, stats, seasons. Hosted 24/7 on SparkedHost
-(Apollo panel, Python 3.11, startup file `CQ_Bot/main.py`, GitHub autodeploy via Setup Git).
-Make.com ingestion retired 2026-06-19 — the bot now handles all OCR ingestion itself
-(`cogs/ingest.py` on_message + `core.run_ocr`).
+## 1. 프로젝트 개요
 
-## File map
+**Champion's Queue (CQ)** — Call of Duty Mobile 5v5 경쟁 큐 커뮤니티를 위한 Discord 봇.
 
-| File | Role |
+- **정체성**: 신원 관리(IGN 등록), 경기 통계(OCR 수집), 시즌 운영, 성과 기반 MMR modifier, 큐 리마인더/잠금 자동화
+- **운영 형태**: 파일럿 단계, 1인 운영 (owner: F10W3R)
+- **설계 원칙**: **Airtable-first** — 모든 데이터는 Airtable에 저장되고, 봇은 그 위의 자동화 계층
+- **서버**: EN/ES 사용자 기반 (기본 언어: 영어)
+- **호스팅**: SparkedHost (Apollo Panel / Pterodactyl), always-on 24/7
+
+---
+
+## 2. 아키텍처 — 역할 분담
+
+### NeatQueue (외부 3rd-party 봇)이 소유하는 것
+- 큐 생성/개폐, matchmaking (5v5 fill-and-pop), base MMR (승패 ±25), 큐 채널 잠금 상태
+- `#queue` (`1512331710736633906`)와 `#queue-2026champs` (`1514827048885948516`) 두 큐 채널 운영
+
+### 이 봇이 소유하는 것
+- **신원**: IGN 등록(`/ign`), Verified → Registered 역할 게이트
+- **통계**: OCR 스크린샷 수집 → Airtable → `/stats`, `/leaderboard`
+- **시즌**: 시즌 기간, 주간 리더보드, 시즌 리포트
+- **MMR modifier**: Impact 기반 ±10 추가 점수 (NeatQueue base 위에)
+- **큐 리마인더 + 잠금 자동화**: T-2h/T-30min/LIVE 알림, 3시간 윈도우 잠금 제어, RSVP
+- **자가역할**: region/weapon/team 셀렉터, `/clearteam`
+
+### 데이터 흐름
+```
+플레이어가 #results에 스크린샷 2장 업로드
+  → on_message 감지 → GPT-4.1 vision OCR → JSON 파싱
+  → matcher (3-stage: exact → fuzzy → review)가 IGN → player record 연결
+  → Airtable Records_HP / Records_SND에 행 생성
+  → /stats, /leaderboard에서 집계 (rollup/formula 필드)
+  → NeatQueue 매치 종료 시 base MMR ±25 즉시 부여
+  → 10분 루프가 impact 읽어 modifier ±10 추가 부여
+```
+
+---
+
+## 3. 폴더 구조
+
+```
+Champion's Queue/                         # repo root
+├── .gitignore                            # secrets, runtime state, OS artifacts
+├── _push_to_github.bat                   # deploy helper (Windows)
+├── _setup_git_and_commit.bat             # deploy helper (Windows)
+├── Staff/                                # staff manuals (.docx EN/ES)
+└── CQ_Bot/                               # ← THE BOT
+    ├── main.py                           # entry point: 8 cogs 로드, tree.sync
+    ├── core.py                    (650줄) # 공유: config/env, Airtable, matcher, OCR, reconcile, season, NeatQueue API, is_staff()
+    ├── matcher.py                          # 3-stage IGN 매칭 (exact → fuzzy → review)
+    ├── ocr_prompt.py                       # GPT-4.1 vision 프롬프트
+    ├── requirements.txt                    # discord.py, pyairtable, python-dotenv, rapidfuzz, openai
+    ├── .env                               # LIVE SECRETS (gitignored)
+    ├── .gitignore                          # 2nd layer
+    ├── cogs/
+    │   ├── registration.py          # /ign /changeign /syncroles, /ignhelp, NeatQueue rejection auto-helper
+    │   ├── stats.py                 # /stats (DM), /leaderboard
+    │   ├── ingest.py                # on_message OCR, 45s reconcile loop, /review /link /unlink /reject
+    │   ├── season.py                # /season /seasonreport /weeklyreport, weekly leaderboard loop
+    │   ├── mmr.py                   # Impact-MMR 10min loop, /applymodifiers, /backfillmodifiers, per-player backfill, public mirror
+    │   ├── selfroles.py             # /rolepanel, region/weapon/team pickers, /clearteam, on_member_update tag cleanup
+    │   ├── verify.py                # /verifypanel, access application flow
+    │   └── queue.py                 # reminder_loop (매분), RSVP 패널, lock/unlock, manual-open 보호, /queuepanel
+    ├── _smoke_test.py                      # 오프라인 테스트 harness
+    ├── _neatqueue_api_test.py              # NeatQueue API 탐색 스크립트 (수동 실행용)
+    ├── Team list_EU.txt, Team list_NA.txt  # 팀 로스터 seed data
+    └── docs:
+        ├── CLAUDE.md                       # ← 이 파일 (진실 원천)
+        ├── IMPROVEMENT_PLAN.md             # roadmap (체크박스)
+        ├── COMMANDS_GUIDE.md              # 사용자용 명령 복붙 블록
+        ├── DEPLOY_GUIDE_SparkedHost.md    # 배포 가이드
+        ├── NEATQUEUE_SETUP.md             # NeatQueue 큐 설정 런북
+        ├── SELFROLES_SETUP.md             # 자가역할 설정 런북
+        └── CODM_2026_Esports_Settings.md  # 게임 룰셋 참조
+```
+
+---
+
+## 4. 환경 변수 (.env)
+
+`.env`는 **gitignored** — GitHub autodeploy로 전달되지 않음. 서버에서 수동 설정 필요.
+
+### 필수 (시크릿)
+| 변수 | 용도 |
 |---|---|
-| `main.py` | Entry. Logging setup, loads 7 cogs, tree.sync on_ready |
-| `core.py` | Shared: env/config, Airtable tables, Matcher init, OCR call, ingest_match (batch_create + Season tag), reconcile_once, season aggregation engine + TTL caches, send_staff_log |
-| `matcher.py` | 3-stage IGN matching: normalize-exact → JaroWinkler fuzzy (T_HIGH .92 / T_LOW .75 / MARGIN .08) → review/no_match. Self-learning aliases |
-| `ocr_prompt.py` | Vision prompt (HP/SND schema, map whitelist, roster hint injection) |
-| `cogs/registration.py` | /ign /changeign /syncroles + on_member_update (Verified→DM guide if unregistered) + Registered role grant |
-| `cogs/stats.py` | /stats (DM-only, self-only: no member arg, ephemeral reply + DMs the embed; career rollups + Advanced from Airtable formula fields) + /leaderboard (career=rollups, season=bot aggregation, advanced=Airtable fields, hp_dpk sorts ASCENDING) |
-| `cogs/ingest.py` | on_message screenshot handler, 45s reconcile loop (+matcher.reload), /review /link /unlink /reject, staff alerts |
-| `cogs/season.py` | /season /seasonreport /weeklyreport + weekly top-10 loop (Mon 12:00 UTC, reads precomputed Players fields, 1 table scan) |
-| `cogs/mmr.py` | Phase 7 Impact-MMR modifier loop (10-min, NeatQueue add/stats) + /applymodifiers. DRYRUN default |
-| `cogs/selfroles.py` | /rolepanel posts a persistent button panel (region/weapon/team). Team pick → Champs role + `[TAG]` nickname + Players.Team. Region pick also writes Players.Region. Roles resolved by NAME (auto-create). Options: region from `REGION_ROLE_NAMES`, weapon from `WEAPON_ROLE_NAMES`, teams live from Teams table |
-| `cogs/verify.py` | /verifypanel posts #verify panel with **Request Access** button → modal (Name/Route/Supporting info) → bot posts application to STAFF_LOGS channel (mention shown, no ping) with staff Approve/Reject (Approve grants `VERIFIED_ROLE_NAME` → registration onboarding DM) AND **Select Team** button → `selfroles.open_team_picker` → Champs role (championship-queue path; no-team players still get Verified→main queue). Persistent views; applicant id from embed footer |
-| `_smoke_test.py` | Offline test harness (fake Airtable/OpenAI). Run after every change |
+| `DISCORD_TOKEN` | 봇 토큰 |
+| `AIRTABLE_API_KEY` | Airtable Personal Access Token |
+| `AIRTABLE_BASE_ID` | `appm2BhtqdgYGFCMH` |
+| `OPENAI_API_KEY` | GPT-4.1 vision OCR용 |
+| `NEATQUEUE_TOKEN` | NeatQueue REST API (raw token, Bearer 없음) |
 
-Docs (root, ko): `STATUS.md` server-build log (separate setup scripts, NOT this bot) ·
-`IMPROVEMENT_PLAN.md` roadmap/phases · `DEPLOY_GUIDE_SparkedHost.md` hosting ·
-`NEATQUEUE_SETUP.md` queue config commands · `COMMANDS_GUIDE.md` user-facing guide (en) ·
-`CODM_2026_Esports_Settings.md` ruleset reference ·
-`SELFROLES_SETUP.md` self-roles panel + Champs-only queue + shared-MMR setup.
+### 채널/역할 ID
+| 변수 | 기본값 | 용도 |
+|---|---|---|
+| `RESULTS_CHANNEL_ID` | `1512331781758652546` | #results — 스크린샷 업로드 + MMR 공개 미러 |
+| `STAFF_LOGS_CHANNEL_ID` | `1512332329735950386` | staff 로그/알림 |
+| `WEEKLY_LEADERBOARD_CHANNEL_ID` | `0` (→ staff logs) | 주간 리더보드 |
+| `MMR_PUBLIC_CHANNEL_ID` | `0` (비활성) | MMR modifier 공개 요약 미러 |
+| `IGN_HELP_CHANNEL_ID` | `0` | #ign — 등록 가이드 패널 |
+| `QUEUE_JOIN_CHANNEL_ID` | `1514827048885948516` | #queue-2026champs — NeatQueue join 버튼 |
+| `QUEUE_REMINDER_CHANNEL_ID` | `0` (→ join 채널) | 리마인더/RSVP 발화 채널 |
+| `QUEUE_PING_ROLE_ID` | `0` | "Queue Ping" 역할 (T-30min/LIVE 핑) |
+| `REGISTERED_ROLE_ID` | `0` | "Registered" — /ign 시 부여, NeatQueue 게이트 |
+| `CHAMPS_ROLE_ID` | `1515951370987896852` | "Champs" — 팀 선택 시 부여 |
+| `GUILD_ID` | `1512319088146255982` | 서버 ID |
 
-## Design principle (owner directive)
+### MMR 설정
+| 변수 | 기본값 | 용도 |
+|---|---|---|
+| `MMR_MODIFIER_DRYRUN` | `1` (dry-run) | **`.env`에서 `0`으로 설정됨 (LIVE)** |
+| `MMR_IMPACT_MIN` | `60` | impact 하한 (→ -MAX) |
+| `MMR_IMPACT_MAX` | `200` | impact 상한 (→ +MAX) |
+| `MMR_MODIFIER_MAX` | `10` | 최대 ±modifier |
 
-**If Airtable can compute it, Airtable computes it.** Bot only reads precomputed
-rollup/formula fields. Bot-side aggregation (`season_player_stats`) exists ONLY for
-season-scoped queries (rollups can't filter by season dynamically): /leaderboard with
-explicit season, /seasonreport, /season placement. Everything else reads Players fields.
+### 큐 설정
+| 변수 | 기본값 | 용도 |
+|---|---|---|
+| `QUEUE_STATE_FILE` | `queue_state.json` | RSVP + dedup 영속화 |
+| `QUEUE_REMINDER_ENABLED` | `1` | 0 = 루프 비활성 |
 
-## Airtable (base `appm2BhtqdgYGFCMH` "Champion's Queue Stats")
+---
 
-- **Players** `tbl2sN1bXNlpcUBhV`: Discord ID (key), Discord Handle, Primary IGN, `Region`
-  (singleSelect: NA/LATAM, EU, APAC, MENA — written by /rolepanel), `Team` (link→Teams,
-  `fldHOWyDLpf741RZg`, set by /rolepanel), links to Aliases/Records.
-  Career rollups: `HP Games`, `HP Avg K/D|Kills|Deaths|OBJ|Score|Impact|Total Damage|Capture Kill`,
-  `SND Games`, `SND Avg K/D|Kills|Deaths|Assists|Score|Impact|ADR|First Kill|Lone Wolf Win`.
-  **Formula fields (created via MCP, auto-update)**: `HP DPD`, `HP DPK`, `HP Assist %`, `HP ZCS`, `SND Assist %`.
-  (sum-ratio == avg-ratio trick: SUM(A)/SUM(B) ≡ Avg(A)/Avg(B) over same record set)
-- **Records_HP** `tblDp5p1XTzdeFmWm` / **Records_SND** `tblZePZqGRJS5tLbG`: per-player-per-map rows.
-  Fields: IGN as read, Player(link), Kills/Deaths/(Assists)/K/D/Score/Impact + mode metrics,
-  Date, Map(select), Match ID(=discord msg id, dedup key), Status(Matched/Needs Review/Unmatched), **Season**(text).
-- **Aliases** `tblHd3q0MNm1186hH`: IGN variant → Player. Source: Primary/Name Change/OCR Auto.
-- **Teams** `tblnTq4qEFuMzZt7i`: `Name` (primary = menu label), `Tag` (nickname prefix, e.g. FLC — stored
-  WITHOUT brackets, bot adds them), `Active` (checkbox; only Active rows appear in the /rolepanel team menu),
-  `Region` (singleSelect NA/EU; team menu is split into one dropdown per region to stay under Discord's
-  25-option cap), `Players` (reverse link). Seeded with 32 teams (16 NA + 16 EU). Staff-maintained roster;
-  self-select is unverified by design (owner confirms membership manually).
-- Airtable MCP connector is available — use it for schema/field changes instead of guiding the user.
+## 5. 슬래시 명령 (19개)
 
-## Env (.env)
+### Player (5)
+| 명령 | 설명 |
+|---|---|
+| `/ign [name]` | IGN 등록 + Registered 역할 부여 |
+| `/changeign [new]` | IGN 변경 |
+| `/stats` | 본인 통계 (DM) |
+| `/leaderboard` | 리더보드 |
+| `/season` | 현재 시즌 정보 |
 
-DISCORD_TOKEN, AIRTABLE_API_KEY, AIRTABLE_BASE_ID, OPENAI_API_KEY, OCR_MODEL(gpt-4.1),
-RESULTS_CHANNEL_ID, STAFF_LOGS_CHANNEL_ID, LEADERBOARD_MIN_GAMES(5), REGISTERED_ROLE_ID,
-CURRENT_SEASON(S1), SEASON_START/END(ISO), PLACEMENT_GAMES(5), SEASON_CACHE_TTL(600),
-VERIFIED_ROLE_NAME(Verified Player), WEEKLY_LEADERBOARD_CHANNEL_ID(0→staff logs).
-Self-roles: CHAMPS_ROLE_ID(1515951370987896852 — resolved first, no dup), CHAMPS_ROLE_NAME(Champs fallback), SELFROLES_AUTO_CREATE(1).
-NeatQueue MMR modifier: NEATQUEUE_TOKEN, NEATQUEUE_QUEUE_CHANNEL_ID, MMR_MODIFIER_MAX(10),
-MMR_IMPACT_MIN(60)/MMR_IMPACT_MAX(200) (absolute Impact band: MIN→−MAX, MAX→+MAX, neutral=midpoint),
-MMR_MODIFIER_DRYRUN(1).
+### Staff (14)
+| 명령 | 설명 |
+|---|---|
+| `/syncroles` | 전체 Registered 역할 동기화 |
+| `/review` | Needs Review 레코드 검토 |
+| `/link [record_id] [member/ign]` | 레코드 → 플레이어 수동 연결 |
+| `/unlink [record_id]` | 연결 해제 |
+| `/reject [record_id]` | 레코드 거부 |
+| `/seasonreport` | 시즌 리포트 |
+| `/weeklyreport` | 주간 리더보드 수동 게시 |
+| `/applymodifiers` | MMR modifier 즉시 처리 |
+| `/backfillmodifiers [count]` | 과거 매치 modifier 소급 적용 |
+| `/rolepanel` | 자가역할 패널 게시 |
+| `/clearteam [member]` | 팀 제거 (역할+Airtable+닉네임 태그) |
+| `/verifypanel` | 인증 패널 게시 |
+| `/queuepanel` | RSVP 패널 수동 게시 (테스트용) |
+| `/ignhelp` | IGN 등록 가이드 패널 게시 |
 
-## Slash commands (15)
+---
 
-Player: /ign /changeign /stats /leaderboard /season
-Staff: /syncroles /review /link /unlink /reject /seasonreport /weeklyreport /applymodifiers /rolepanel /verifypanel
+## 6. 기능별 상세
 
-## Workflows
+### 6.1 IGN 등록 & 인증
+- `/ign` → Airtable Players 행 생성 + Aliases 행 + `relink_records` (과거 unmatched 연결) + Registered 역할 부여
+- **`/link` 후 자동 MMR backfill**: 신규 연결 플레이어의 과거 매치 modifier 소급 적용 (per-player, `applied` 셋으로 중복 방지)
+- **`/ignhelp` 패널**: `#ign`에 등록 가이드 상시 게시 + "How do I register?" 버튼
+- **NeatQueue rejection auto-helper**: `on_message`로 NeatQueue "not registered" 거부 감지 → `#ign`으로 유도하는 답장 자동 추가
 
-- **Verify changes**: `python -m py_compile <files>` + `python _smoke_test.py` → must end
-  "ALL SMOKE TESTS PASSED". Add test cases for new core logic.
-- **Deploy**: upload changed files via Apollo panel Files tab → Restart → console shows
-  "Synced N slash command(s)". Never run the bot locally while hosted copy runs (double-respond).
-- **Session quirk (Cowork)**: the bash-side mirror of this folder can serve STALE/TRUNCATED
-  copies of files edited via Edit/Write tools (Windows-side file is always correct).
-  NEVER trust bash reads of recently-edited files; NEVER bash-write/move/git-commit inside
-  this folder. To verify: reconstruct files in /tmp (heredoc or patch script) and compile/test there.
-- **git**: repo initialized, .gitignore ok (.env/__pycache__/*.bak/*.log), but ZERO commits.
-  Owner should commit from their own machine (`git add -A && git commit`) — not from the sandbox (stale mirror risk).
+### 6.2 통계 & 시즌
+- `/stats` (DM 전용), `/leaderboard` (임베드)
+- `/season`, `/seasonreport`, `/weeklyreport` + 주간 루프 (월요일 12:00 UTC)
+- Advanced 지표: DPD, DPK, ZCS, Assist % (HP Games ≥ 1일 때만 표시)
 
-## Known pitfalls
+### 6.3 OCR 수집
+- `on_message`가 #results의 이미지 2장 감지 → GPT-4.1 vision OCR → JSON → Airtable
+- 45초 reconcile loop: unmatched 레코드 재매칭 (matcher TTL 5분)
+- matcher: 3-stage (exact → fuzzy auto → needs review)
+- `/review`, `/link`, `/unlink`, `/reject` 스태프 워크플로
 
-- Airtable formula strings: always brace field names `{Player}`. Numeric-only interpolation is injection-safe; quote-strip user input otherwise.
-- `tree.sync()` runs on every on_ready (reconnects) — known minor issue, fix = once-flag.
-- reconcile loop reloads matcher every 45s (full Players+Aliases scan) — **2026-06-19 fixed**: reload is now TTL-gated via `core.reload_matcher_if_stale()` (5-min default, `MATCHER_RELOAD_TTL` env). reconcile_once still runs every 45s (cheap, B1 guard = 0 writes). reload() and reconcile_once() both use `fields=` projection. Eager-reload sites (/ign, /changeign, /link via relink_records) bypass the TTL. Airtable Api has `timeout=(5,30)` + urllib3 Retry(429/5xx).
-- discord.py pitfalls hit before: AutoModPresets API rename, onboarding prompts need `id`s, welcome-screen desc ≤50 chars.
-- DPK leaderboard = ascending sort + zero-filter (lower is better). Don't "fix" it to descending.
-- `/stats` career section uses rollups; Advanced section reads formula fields — both from the single Players record fetch.
-- selfroles: persistent panel needs `bot.add_view(SelfRolePanel())` at load (done in `setup()`) or buttons die after restart. Bot needs **Manage Roles** (role ABOVE every assignable role) + **Manage Nicknames**; cannot rename owner / higher-role members (those keep role+Airtable, skip nick). Team menu is split into one dropdown per `Region` (≤24 teams each + "leave" row); max 5 regions per panel (Discord 5-component limit).
-- Champs-only queue is gated by **channel permissions** (only the Champs role can view the queue channel) + a 2nd NeatQueue queue in that channel sharing stats via `/leaderboardconfig sharedstats set: "<name>"`. No bot code for the gate — only the Champs role grant (selfroles) matters. Route its #results to the same RESULTS_CHANNEL_ID so ingest/stats stay unified.
+### 6.4 MMR modifier
+- **10분 루프**: NeatQueue history 폴링 → impact 읽기 → modifier 계산 → 적용
+- **Impact 공식**: `modifier = round((impact - 130) / 70 * 10)`, 범위 ±10, impact 60→-10 / 130→0 / 200→+10
+- **시간창**: `[mtime - 2h, mtime + 4h]` (lookback: 시리즈 종료 전 게임별 스크린샷 포함)
+- **재시도**: impact 데이터 없으면 processed에 넣지 않고 10분마다 재시도 (최대 48h)
+- **`/backfillmodifiers`**: dry-run 기간에 누락된 매치 modifier 소급 적용 (match-level `backfilled` 셋)
+- **per-player backfill**: `/link`·`/ign` 후 그 플레이어만 소급 적용 (player+match `applied` 셋)
+- **공개 미러**: `MMR_PUBLIC_CHANNEL_ID`에 플레이어용 요약 게시 (dry-run 아닐 때만)
+- **NeatQueue "User not found"**: 영구 에러 → `⏭ not in NQ`로 graceful skip
 
-## Pending / roadmap (IMPROVEMENT_PLAN.md)
+### 6.5 큐 리마인더 & 잠금 자동화
+- **reminder_loop** (매분): NA 23:00 ET / EU 23:00 CET 윈도우 감시
+- **Phases**: T-2h (준비) → T-30min (Queue Ping) → LIVE (메시지 + unlock + RSVP DM) → lock (+3h)
+- **RSVP 패널**: 공유 명단 (NA/EU 분리 없음), Join/Leave/Refresh 버튼, "X reserved — Y more to fill next 5v5 lobby"
+- **LIVE DM**: RSVP 명단에게 "지금 들어가!" 디엠 (unlock 완료 후)
+- **잠금 동기화**: LIVE 메시지와 NeatQueue unlock을 같은 tick에
+- **union 로직**: 어느 윈도우든 열려 있으면 lock 스킵
+- **수동 /unlock 보호**: `on_interaction`으로 감지, `manual_open` 플래그로 자동 lock 스킵 (24h 안전장치)
+- **KST 미표기**: 서버가 EN/ES 기반이므로 각 윈도우 현지 시간만 표시
 
-- **Phase 7 DONE (dry-run)**: `cogs/mmr.py` polls `GET /api/v1/history/{guild}` every 10 min,
-  matches screenshots via Match ID snowflake timestamps (4h window), applies Impact modifier
-  via `POST /api/v2/add/stats` `{channel_id, stat:"mmr", value, user_id}`.
-  **NeatQueue auth = RAW token in Authorization header, NO "Bearer"** (verified live).
-  `MMR_MODIFIER_DRYRUN=1` default — flip to 0 after reviewing one weekend of staff-log reports.
-  State persisted in `mmr_state.json` on host. NeatQueue base MMR change is NOT flat ±25
-  (observed ±31.7 — variance/multipliers on). /applymodifiers = manual trigger (15 slash cmds total).
-- MMR soft reset at season end ((old+1000)/2) — now unblocked; build on nq_history + add/stats
-  (read each player's MMR from /api/v1/playerstats, apply delta via add/stats).
-- Players "Dashboard" grid view in Airtable — manual, cosmetic, may not exist yet.
-- main.py sync-once flag; reconcile reload interval; pytest migration.
+### 6.6 자가역할 & 팀
+- `/rolepanel`: region/weapon/team 셀렉터 (persistent View)
+- `/clearteam`: 역할 + Airtable Team + 닉네임 [TAG] 한 번에 제거
+- `on_member_update`: Champs 역할 제거 시 자동 닉네임 태그 제거 (이중 안전망)
+
+---
+
+## 7. Airtable 스키마
+
+Base: `appm2BhtqdgYGFCMH` ("Champion's Queue Stats")
+
+| 테이블 | ID | 주요 필드 |
+|---|---|---|
+| **Players** | `tbl2sN1bXNlpcUBhV` | Discord ID, Discord Handle, Primary IGN, Team, Region, HP/SND Games, HP/SND Avg * (rollup) |
+| **Records_HP** | `tblDp5p1XTzdeFmWm` | IGN as read, Player (link), Kills, Deaths, K/D, OBJ, Score, Impact, Total Damage, Capture Kill, Date, Map, Match ID, Season, Status |
+| **Records_SND** | `tblZePZqGRJS5tLbG` | IGN as read, Player (link), Kills, Deaths, Assists, K/D, Score, Impact, ADR, First Kill, Lone Wolf Win, Date, Map, Match ID, Season, Status |
+| **Aliases** | `tblHd3q0MNm1186hH` | IGN, Player (link), Source |
+| **Teams** | `tblnTq4qEFuMzZt7i` | Name, Tag, Active, Region |
+
+**Status 값**: `Matched` / `Needs Review` / `Unmatched` / `Rejected`
+**Match ID**: Discord 메시지 snowflake (스크린샷 게시 메시지 ID)
+
+---
+
+## 8. 워크플로 (검증/배포)
+
+### 로컬 검증
+```bash
+python -m py_compile cogs/*.py core.py main.py   # 구문 체크
+python _smoke_test.py                             # 전체 회귀 테스트
+```
+
+### 배포 (GitHub autodeploy)
+1. `git push origin main` → GitHub webhook → SparkedHost Apollo Restart
+2. Apollo가 `git pull` → 코드 자동 업데이트 → 봇 재시작
+3. **`.env`는 자동으로 안 감** — 서버 File Manager에서 수동 편집 후 Restart
+
+### 상태 파일 (서버에만 존재, gitignored)
+- `mmr_state.json` — `processed` / `backfilled` / `applied` 셋
+- `queue_state.json` — RSVP 명단 / `fired` 키 / `manual_open` / `live_dmed`
+
+---
+
+## 9. 알려진 함정
+
+1. **Airtable formula brace**: formula 문자열에서 필드명은 반드시 `{Field}` 중괄호. 누락 시 422.
+2. **`tree.sync()` 재실행**: `on_ready`마다 도므로 재연결 시마다 sync. known minor issue.
+3. **NeatQueue "User not found"**: 매치 history엔 있지만 NeatQueue DB엔 없는 플레이어 → 400 영구 에러, graceful skip.
+4. **Impact 시간창 lookback**: 시리즈 종료(mtime) 전에 올라온 게임별 스크린샷을 잡으려 `[mtime-2h, mtime+4h]` 사용.
+5. **NeatQueue value 정수만**: `nq_add_mmr`의 value는 반드시 정수. 소수점 → 422.
+6. **`.env` autodeploy 미전달**: gitignored라 서버 수동 설정 필수. 빠지면 기본값(=dry-run, 채널 폴백)으로 동작.
+7. **`/clearteam` description ≤ 100자**: Discord 제한. 초과 시 `tree.sync()` 전체 실패.
+
+---
+
+## 10. 업데이트 지침 (이 문서를 유지하는 규칙)
+
+**이 섹션은 CLAUDE.md를 단일 진실 원천으로 유지하기 위한 규칙이다.**
+
+### 언제 업데이트하나
+다음 상황이 발생하면 **커밋 전에 반드시** 해당 섹션을 갱신한다:
+- 새 기능 추가 → §6 기능별 상세 + §5 명령 목록
+- 새 슬래시 명령 추가 → §5
+- 새 환경변수 추가 → §4
+- Airtable 스키마 변경 → §7
+- 새 함정/버그 발견 → §9
+- 파일 추가/삭제/이동 → §3 폴더 구조
+- 아키텍처 변경 → §2
+
+### 원칙
+- **CLAUDE.md가 유일한 진실 원천.** 다른 문서와 중복 금지.
+- `IMPROVEMENT_PLAN.md`는 roadmap 전용 (체크박스).
+- `COMMANDS_GUIDE.md`는 사용자용 복붙 블록 (플레이어에게 보여주는 형식).
+- 다른 문서와 충돌하면 **CLAUDE.md가 우선**.
+- 헤더의 **"Last updated" 날짜**를 매 업데이트마다 갱신.
+
+### 주기적 업데이트
+- **특정 태스크나 업무가 끝날 때마다** 이 문서의 관련 섹션을 확인하고 갱신한다.
+- 큰 기능 추가 후: §6에 새 섹션 추가 + §5 명령 + §4 환경변수 점검.
+- 버그 수정 후: §9에 함정으로 등록 (재발 방지).
+- 시즌 전환 시: §7 스키마 변경사항 반영.
+
+---
+
+## 11. 로드맵
+
+상세는 `IMPROVEMENT_PLAN.md` 참조. 주요 진행 중 항목:
+- Bo3 시리즈별 impact 정확 집계 (현재: 시간창 평균)
+- NeatQueue 매치 ID ↔ OCR 레코드 실제 ID 연결
+- `_smoke_test.py` → pytest 마이그레이션
+- `main.py` sync-once 플래그

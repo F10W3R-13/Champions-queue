@@ -1,6 +1,7 @@
 # CQ Stats Bot — Command Guide (Discord 게시용)
 
 > 아래 두 블록을 그대로 복사해 사용. 블록 1은 공개 채널(#welcome, #roles 등), 블록 2는 스태프 채널(#staff-commands)에 게시 권장.
+> 현재 시스템의 진실 원천은 **CLAUDE.md**. 이 문서는 사용자용 복붙 블록.
 
 ---
 
@@ -63,4 +64,25 @@ The bot posts to the staff log channel automatically when:
 • ⚠️ a match contains names needing review (with Airtable links)
 • 🚨 an OCR ingestion error occurs
 • 🔗 a staff member links/unlinks/rejects a record (audit trail)
+
+**MMR & Queue Management**
+> `/applymodifiers` — Force-process new NeatQueue matches for Impact MMR modifiers now (normally runs every 10 min).
+
+> `/backfillmodifiers` — Backfill missed MMR modifiers onto recent processed matches (count: 1–20, default 2). Use after enabling live mode or fixing a pipeline bug. Safe to re-run (skips already-applied).
+
+> `/queuepanel` — Post the RSVP queue panel manually (normally auto-fired 2h before each session window). Use for testing.
+
+> `/ignhelp` — Post the IGN registration guide panel in the current channel. Pin it in #ign so blocked players can find help.
+
+> `/clearteam` — Strip a player's team membership completely: removes the Champs role, clears their Airtable Team field, and removes the [TAG] prefix from their nickname. Use when someone falsely claimed a team.
+
+> `/rolepanel` — Re-post the self-roles panel (region / weapon / team selectors) if the old one is lost.
+
+> `/verifypanel` — Re-post the access-request / verify panel.
+
+> `/seasonreport` — Generate and post the full season report (top 10 per mode + awards).
+
+> `/weeklyreport` — Force-post the weekly leaderboard (normally auto-posted Monday 12:00 UTC).
+
+> `/syncroles` — Bulk-grant the Registered role to everyone who has a Players record. Use after a migration or if roles are out of sync.
 ```

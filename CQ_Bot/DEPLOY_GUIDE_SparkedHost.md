@@ -2,7 +2,7 @@
 
 초보자용. 위에서부터 순서대로 따라 하면 됩니다. 예상 소요: 20~30분.
 
-올릴 파일/폴더 (`CQ_Bot` 폴더 안): `main.py`, `core.py`, `matcher.py`, `ocr_prompt.py`, `requirements.txt`, `cogs/` 폴더 전체(7개 .py), 그리고 `.env`.
+올릴 파일/폴더 (`CQ_Bot` 폴더 안): `main.py`, `core.py`, `matcher.py`, `ocr_prompt.py`, `requirements.txt`, `cogs/` 폴더 전체(8개 .py), 그리고 `.env`.
 
 > ⚠️ `core.py`와 `cogs/` 폴더는 **반드시** 올려야 합니다. `main.py`가 임포트하므로 빠지면 봇이 켜지지 않습니다.
 
@@ -40,12 +40,12 @@
    - `matcher.py`
    - `ocr_prompt.py`
    - `requirements.txt`
-   - `cogs/` 폴더 전체 (7개 .py: ingest, mmr, registration, season, selfroles, stats, verify)  ← **필수**
+   - `cogs/` 폴더 전체 (8개 .py: ingest, mmr, queue, registration, season, selfroles, stats, verify)  ← **필수**
    - `.env`  ← 이게 토큰·API 키가 든 파일입니다. 같이 올려야 봇이 키를 읽습니다.
 
 > `.bak` 파일이나 `_smoke_test.py`, `__pycache__` 폴더, `bot.log`, `mmr_state.json`은 **올리지 마세요.** 불필요합니다.
 
-> `cogs/` 폴더 업로드 시, 폴더째 끌어다 놓거나(패널이 지원하면), 폴더 안의 .py 7개를 `cogs/` 하위 폴더에 넣어야 합니다. 최상위 경로에 .py가 있으면 안 됩니다 — 반드시 `cogs/` 폴더 안에.
+> `cogs/` 폴더 업로드 시, 폴더째 끌어다 놓거나(패널이 지원하면), 폴더 안의 .py 8개를 `cogs/` 하위 폴더에 넣어야 합니다. 최상위 경로에 .py가 있으면 안 됩니다 — 반드시 `cogs/` 폴더 안에.
 
 `.env` 안에 최소 이 변수들이 들어있는지 확인 (4개뿐이면 부팅 실패):
 ```

@@ -1,7 +1,8 @@
 # CQ Stats Bot — 구조 분석 및 개선 계획
 
-> 작성일: 2026-06-11
-> 참고: STATUS.md는 서버 빌드 스크립트(setup/finish) 일지이며, 이 폴더의 봇(main.py)과는 별개. 이 문서가 봇 본체의 현황/계획 문서.
+> 작성일: 2026-06-11 · 최종 갱신: 2026-06-25
+> 이 문서는 roadmap 전용. 현재 시스템의 진실 원천은 **CLAUDE.md**.
+> 참고: STATUS.md는 삭제됨 (orphan — 존재하지 않는 setup script 참조).
 
 ---
 
@@ -49,7 +50,7 @@ Airtable  Players / HP / SND / Aliases 4테이블에 기록
 ### Phase 0 — 정리 (30분)
 - [x] `git init` + `.gitignore` (.env, __pycache__, *.bak) — 2026-06-18 완료 (GitHub private repo `F10W3R-13/Champions-queue` push까지)
 - [x] `main.py.bak`, `matcher.py.bak`, `__pycache__` 삭제
-- [ ] STATUS.md를 서버일지/봇일지로 분리하거나 이 문서로 일원화
+- [x] STATUS.md 삭제 (orphan — 존재하지 않는 setup script 참조). CLAUDE.md로 일원화.
 
 ### Phase 1 — 버그 수정 (반나절)
 - [x] B1: reconcile 필터를 `AND({Player}='', {Status}='')` 형태로 바꾸고, Status 동일하면 skip
@@ -96,11 +97,11 @@ Airtable  Players / HP / SND / Aliases 4테이블에 기록
 - 주의: NeatQueue 기본 변동이 ±25 고정이 아니라 가변(±31 관측) — variance 설정 확인 필요
 **확정 설계**: NeatQueue가 승패 기본 ±25 처리(기존 설정 유지), 우리 봇이 Impact 보정 **±5**를 추가 적용 → 합계 ±20~30.
 
-- [ ] **7-1. NeatQueue API 검증 (선행 필수)**: 서버 API 토큰 발급 → 플레이어 MMR 증감 endpoint 실호출 테스트. 실패 시 폴백: 봇이 `/managestats increment` 명령 목록을 스태프 채널에 자동 게시(반자동)
-- [ ] **7-2. 승패/팀 정보 확보**: NeatQueue가 #results에 올리는 결과 메시지(embed)를 봇이 파싱 → 승리팀·Discord ID 목록 추출. (웹훅 수신은 SparkedHost에서 인바운드 포트가 필요해 차선책)
-- [ ] **7-3. 매치 연동**: OCR ingest(스샷)와 NeatQueue 결과 메시지를 시간 근접성으로 연결. Bo3 시리즈면 맵별 Impact 평균 사용
-- [ ] **7-4. 보정값 계산**: `modifier = clamp(round((본인 Impact − 로비 평균 Impact) / scale), −5, +5)` — scale은 첫 주 데이터로 보정
-- [ ] **7-5. 적용 + 감사 로그**: NeatQueue API로 증감 적용, 스태프 채널에 적용 내역 자동 게시
+- [x] **7-1. NeatQueue API 검증**: Authorization = raw token, `POST /api/v2/add/stats` body `{channel_id, stat:"mmr", value(int), user_id}`, `GET /api/v1/history/{server}`로 매치/변동치 조회. lock/unlock도 `POST /api/v2/lock|unlock` body `{channel_id}`. (2026-06-22 검증 완료)
+- [x] **7-2. 승패/팀 정보 확보**: NeatQueue history의 `teams[].players[].id` + `mmr_change` 부호로 승패/팀 정보 확보. 별도 메시지 파싱 불필요.
+- [x] **7-3. 매치 연동**: 시간 윈도우 `[mtime-2h, mtime+4h]`로 OCR impact와 연결 (lookback 추가: 시리즈 종료 전 스크린샷 포함). Bo3 맵별 평균은 여전히 TODO.
+- [x] **7-4. 보정값 계산**: `modifier = round((impact - 130) / 70 * 10)` — 절대 Impact 밴드 (MIN 60 → -10, MAX 200 → +10). `compute_modifier()` 헬퍼로 분리.
+- [x] **7-5. 적용 + 감사 로그**: `nq_add_mmr`로 적용, 스태프 채널 + `MMR_PUBLIC_CHANNEL_ID` 공개 채널에 게시.
 
 ### Phase 9 — 시즌 시스템 ✅ 구현 완료 (2026-06-12)
 - ingest 시 `Season` 자동 태깅 (`.env`의 `CURRENT_SEASON`)
@@ -125,7 +126,7 @@ Airtable  Players / HP / SND / Aliases 4테이블에 기록
 - [x] Champs 역할 보유자만 입장 가능한 큐 채널 (채널 권한으로 게이트, 봇 코드 없음)
 - [x] 두 큐 간 MMR/전적 공유: 각 큐 채널에서 `/leaderboardconfig sharedstats set: "Champions Queue"` (동일 sharedstats 이름)
 - [x] 결과는 같은 `#results`로 라우팅 (`/resultschannel`) → 스탯 ingest 통일
-- [ ] (선택) 동시 경기용 2번째 큐 운영 — 위 설정 복제로 가능
+- [x] ~~(선택) 동시 경기용 2번째 큐 운영~~ — 통합 단일 큐 설계(cogs/queue.py)로 superseded
 - 상세: SELFROLES_SETUP.md B 섹션 참고
 
 ---
@@ -133,3 +134,31 @@ Airtable  Players / HP / SND / Aliases 4테이블에 기록
 ## 4. 권장 착수 순서
 
 **Phase 1(B1~B4)은 완료됨.** 그 다음으로 효율적인 순서: Phase 2(문제가 생겨도 보이게) → Phase 3(운영 동선) → Phase 5(reconcile reload 최적화는 2026-06-19 완료, 나머지 구조 개선은 여유 있을 때).
+
+---
+
+## Session 2 (2026-06-22 ~ 2026-06-25) — 큐 자동화 + MMR 수정 + 문서화
+
+### 완료 항목
+- [x] **큐 리마인더 + 3시간 잠금해제 시스템** (`cogs/queue.py` 신규): NA 23:00 ET / EU 23:00 CET, T-2h/T-30min/LIVE/lock phases, RSVP 패널, DST-safe (zoneinfo)
+- [x] **MMR modifier live 전환**: `MMR_MODIFIER_DRYRUN=0`, 재시도 로직, 422 정수 변환, TypeError 크래시 수정, 시간창 lookback (시리즈 종료 전 스크린샷 포함)
+- [x] **`/backfillmodifiers`**: dry-run 기간 누락 매치 modifier 소급 적용 (match-level `backfilled` 셋)
+- [x] **per-player MMR backfill**: `/link`·`/ign` 후 신규 연결 플레이어 modifier 소급 적용 (player+match `applied` 셋)
+- [x] **IGN 등록 안내**: `/ignhelp` 패널 + NeatQueue rejection auto-helper + onboarding DM 강화
+- [x] **수동 /unlock 보호**: `on_interaction` 감지, `manual_open` 플래그로 자동 lock 스킵 (24h 안전장치)
+- [x] **RSVP LIVE DM**: 세션 시작 시 RSVP 명단에게 "지금 들어가!" 디엠
+- [x] **NA/EU 통합**: 단일 공유 RSVP 명단, 통합 embed (두 윈도우 시간 표시)
+- [x] **MMR 공개 미러**: `MMR_PUBLIC_CHANNEL_ID`에 플레이어용 요약 게시
+- [x] **`/clearteam`**: 역할 + Airtable Team + 닉네임 [TAG] 한 번에 제거 + `on_member_update` 자동 태그 제거
+- [x] **NeatQueue "User not found" graceful skip**: `⏭ not in NQ` 표시
+- [x] **코드 정리**: 데드 코드 제거, `is_staff()` 7-way 중복 → `core.py` 단일 정의, stale 주석 정리 (Phase/B1-B4/Make.com 태그)
+- [x] **문서 통합**: CLAUDE.md 재작성 (단일 진실 원천), HANDOFF.md/champions_queue_status.md/STATUS.md 삭제, IMPROVEMENT_PLAN/COMMANDS_GUIDE/DEPLOY_GUIDE 갱신
+
+### 남은 항목 (Session 3+)
+- [ ] Bo3 시리즈별 impact 정확 집계 (현재: 시간창 평균, 노이즈 가능)
+- [ ] NeatQueue 매치 ID ↔ OCR 레코드 실제 ID 연결 (현재: 시간창 기반)
+- [ ] `_smoke_test.py` → pytest 마이그레이션
+- [ ] `main.py` `tree.sync()` sync-once 플래그
+- [ ] matcher 임계값 실데이터 보정 (T_HIGH 0.92 / T_LOW 0.75 / MARGIN 0.08)
+- [ ] OCR 모델 비교 (gpt-4.1 vs gpt-4.1-mini)
+- [ ] MMR 소프트 리셋 (시즌 종료 시)
