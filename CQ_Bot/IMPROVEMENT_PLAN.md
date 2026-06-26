@@ -171,4 +171,4 @@ Airtable  Players / HP / SND / Aliases 4테이블에 기록
 - 매치 후 준실시간 훅(cogs/mmr.py) + 매일 00:05 UTC 전수 스윕의 이중 안전망. 하한 700.
 - 멱등성: `decay_applied` 셋(하루 1회), `below_threshold` diff(역할 토글 중복 방지), `dead_days`(grace 연장). dry-run엔 셋·dead_days 모두 미기록.
 - 신규 파일: `cogs/decay.py` / 수정: `core.py`(nq_get_mmr, nq_recent_match_count 등), `cogs/mmr.py`(훅), `main.py`, `_smoke_test.py`, `CLAUDE.md`
-- ⚠️ 배포 전 `.env`에서 `DECAY_DRYRUN=1` 유지 → 스태프 로그 리포트 확인 후 `DECAY_DRYRUN=0` 전환
+- `DECAY_DRYRUN=0` (LIVE) 기본으로 배포 — 코드 기본값이 LIVE. dry-run이 필요하면 `.env`에서 `DECAY_DRYRUN=1`로 덮어쓰기.

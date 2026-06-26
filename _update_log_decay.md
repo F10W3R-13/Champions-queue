@@ -1,7 +1,7 @@
 @everyone
 
 # :loudspeaker: Update Log — Inactivity MMR
-Everything below is running in **observation mode** for now — nothing changes for you yet until we switch it on.
+Everything below is now **live**.
 
 ## :hourglass_flowing_sand: Inactive Players Lose MMR Over Time
 

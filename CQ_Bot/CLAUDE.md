@@ -134,7 +134,7 @@ Champion's Queue/                         # repo root
 | 변수 | 기본값 | 용도 |
 |---|---|---|
 | `DECAY_ENABLED` | `1` | 0 = 루프 비활성 |
-| `DECAY_DRYRUN` | `1` (dry-run) | 1 = 리포트만 (적용·역할 박탈 안 함) |
+| `DECAY_DRYRUN` | `0` (LIVE) | 1 = 리포트만 (적용·역할 박탈 안 함) |
 | `DECAY_GRACE_DAYS` | `7` | 마지막 매치 후 면죄 일수 |
 | `DECAY_RATE` | `10` | 기본 티어 일일 감점량 |
 | `DECAY_ESCALATE_AFTER_DAYS` | `14` | 이 일수부터 2배 티어 |
@@ -241,7 +241,7 @@ Champion's Queue/                         # repo root
 - **면제**: `PLACEMENT_GAMES` 미만(기본 5경기)은 부식·박탈 모두 제외 (신규가입자 보호).
 - **MMR 읽기**: `GET /api/v1/playerstats` → `queues["Champion's Queue"].mmr` (top-level `points`가 아님). 마지막 매치 시각은 `last_match_end`.
 - **이중적용 방지 (decay_applied 셋)**: 키 `{date}|{discord_id}`로 하루 1회 부식 강제. **dry-run엔 decay_applied·dead_days 모두 미기록** (§9.9와 동일 원리 — LIVE 전환 시 누락 방지).
-- **`DECAY_DRYRUN=1` 기본**: `MMR_MODIFIER_DRYRUN`과 독립. dry-run에선 부식·역할 토글·dead_days 증가 모두 리포트만.
+- **`DECAY_DRYRUN=0` (LIVE)**: `MMR_MODIFIER_DRYRUN`과 독립. 1로 두면 부식·역할 토글·dead_days 증가 모두 리포트만.
 - **DM 알림**: 박탈/복구 시 플레이어에게 디엠 (registration.py DM 패턴).
 
 ---

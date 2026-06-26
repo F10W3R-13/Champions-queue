@@ -89,7 +89,7 @@ DECAY_ESCALATE_RATE_NONCHAMPS = int(os.getenv('DECAY_ESCALATE_RATE_NONCHAMPS', '
 # --- Shared (both tiers) ---
 DECAY_FLOOR = int(os.getenv('DECAY_FLOOR', '700'))                  # MMR never decays below this
 DECAY_THRESHOLD = int(os.getenv('DECAY_THRESHOLD', '800'))          # below this = queue access revoked (Champs only)
-DECAY_DRYRUN = os.getenv('DECAY_DRYRUN', '1') == '1'                # 1 = report only, don't apply / revoke
+DECAY_DRYRUN = os.getenv('DECAY_DRYRUN', '0') == '1'                # 1 = report only, don't apply / revoke
 # NeatQueue queue name whose stats we read (sharedstats-merged shared queue).
 # The playerstats payload nests stats per queue; only this key's mmr is authoritative.
 DECAY_QUEUE_NAME = os.getenv('DECAY_QUEUE_NAME', "Champion's Queue")
