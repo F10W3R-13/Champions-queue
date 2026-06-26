@@ -348,6 +348,19 @@ class MMRModifier(commands.Cog):
         if not core.MMR_MODIFIER_DRYRUN and core.MMR_PUBLIC_CHANNEL_ID and lines:
             await self._mirror_to_public(m, lines)
 
+        # Near-realtime 800-point eligibility hook: a loss here may have dropped a
+        # player under the queue threshold, so let the decay cog act within minutes
+        # instead of waiting for the daily sweep. Decay itself is NOT done here —
+        # only the gate. Wrapped so a decay-cog failure can never poison the
+        # modifier pipeline. The cog may be absent (not loaded) -> safe no-op.
+        try:
+            decay_cog = self.bot.get_cog("Decay")
+            if decay_cog:
+                for did in changes:
+                    await decay_cog.check_threshold_for_player(did)
+        except Exception as e:
+            logger.error("Decay threshold hook failed (non-fatal): %s", e)
+
         return embed
 
     async def _mirror_to_public(self, m, lines):

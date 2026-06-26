@@ -4,6 +4,7 @@ import json
 import time
 import asyncio
 import logging
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from pyairtable import Api
 from urllib3.util.retry import Retry
@@ -59,6 +60,40 @@ MMR_MODIFIER_MAX = float(os.getenv('MMR_MODIFIER_MAX', '10'))    # +/- max perfo
 MMR_IMPACT_MIN = float(os.getenv('MMR_IMPACT_MIN', '60'))
 MMR_IMPACT_MAX = float(os.getenv('MMR_IMPACT_MAX', '200'))
 MMR_MODIFIER_DRYRUN = os.getenv('MMR_MODIFIER_DRYRUN', '1') == '1'  # 1 = report only, don't apply
+
+# --- Inactivity decay & 800-point queue eligibility gate (cogs/decay.py) ---
+# Decay is TIERED by whether the player holds the Champs role (tournament-team
+# obligation). Champs holders decay at the base rate; non-Champs (minors, general
+# members who can't enter the champs-only queue) decay at a gentler rate because
+# they're structurally unable to play when the champs queue is the only thing
+# running. Both share ONE MMR pool (sharedstats), so non-Champs can't be fully
+# exempt (that would let them freeload in the same ranking) — hence gentler, not
+# zero. Additionally, any day with NO matches in the last 24h is a 'dead day':
+# nobody could have played, so decay is skipped for everyone and the grace window
+# is extended by the accumulated dead_days (structural-impossibility fairness).
+# Dropping under DECAY_THRESHOLD revokes the Registered role — but ONLY for Champs
+# holders (non-Champs are outside the competitive pool). NeatQueue's own decay is
+# OFF (verified 2026-06-26); no double-decay. Players under PLACEMENT_GAMES total
+# games are exempt entirely. DECAY_DRYRUN is independent of MMR_MODIFIER_DRYRUN.
+DECAY_ENABLED = os.getenv('DECAY_ENABLED', '1') == '1'             # 0 = disable the loop
+# --- Champs tier (tournament-team obligation) ---
+DECAY_GRACE_DAYS = int(os.getenv('DECAY_GRACE_DAYS', '7'))          # Champs: no decay for this many idle days
+DECAY_RATE = int(os.getenv('DECAY_RATE', '10'))                     # Champs: MMR lost per day, base tier
+DECAY_ESCALATE_AFTER_DAYS = int(os.getenv('DECAY_ESCALATE_AFTER_DAYS', '14'))  # Champs: idle days at which rate doubles
+DECAY_ESCALATE_RATE = int(os.getenv('DECAY_ESCALATE_RATE', '20'))   # Champs: MMR lost per day after escalation
+# --- Non-Champs tier (gentler: structurally can't always play) ---
+DECAY_GRACE_DAYS_NONCHAMPS = int(os.getenv('DECAY_GRACE_DAYS_NONCHAMPS', '21'))
+DECAY_RATE_NONCHAMPS = int(os.getenv('DECAY_RATE_NONCHAMPS', '5'))
+DECAY_ESCALATE_AFTER_DAYS_NONCHAMPS = int(os.getenv('DECAY_ESCALATE_AFTER_DAYS_NONCHAMPS', '35'))
+DECAY_ESCALATE_RATE_NONCHAMPS = int(os.getenv('DECAY_ESCALATE_RATE_NONCHAMPS', '10'))
+# --- Shared (both tiers) ---
+DECAY_FLOOR = int(os.getenv('DECAY_FLOOR', '700'))                  # MMR never decays below this
+DECAY_THRESHOLD = int(os.getenv('DECAY_THRESHOLD', '800'))          # below this = queue access revoked (Champs only)
+DECAY_DRYRUN = os.getenv('DECAY_DRYRUN', '1') == '1'                # 1 = report only, don't apply / revoke
+# NeatQueue queue name whose stats we read (sharedstats-merged shared queue).
+# The playerstats payload nests stats per queue; only this key's mmr is authoritative.
+DECAY_QUEUE_NAME = os.getenv('DECAY_QUEUE_NAME', "Champion's Queue")
+DECAY_STATE_FILE = os.getenv('DECAY_STATE_FILE', 'decay_state.json')
 
 # --- Self-roles panel (region / weapon group / championship team) ---
 # Discord role granted when a player picks a championship team (also gates the Champs-only queue).
@@ -592,6 +627,66 @@ def discord_id_map():
         if did:
             out[str(did)] = p["id"]
     return out
+
+
+def nq_get_player(discord_id):
+    """GET /api/v1/playerstats/{GUILD_ID}/{user} -> player dict or None. (sync)
+
+    Returns the raw player payload (with nested per-queue stats) or None when the
+    user has no NeatQueue record ("User not found"). Network/HTTP errors raise so
+    callers can distinguish transient failures from permanent absence. The top-level
+    `points` field is NOT the queue MMR — callers must read queues[DECAY_QUEUE_NAME]."""
+    r = _rq.get(f"{NEATQUEUE_BASE}/api/v1/playerstats/{GUILD_ID}/{discord_id}",
+                headers=_nq_headers(), timeout=20)
+    if r.status_code == 404:
+        return None
+    r.raise_for_status()
+    return r.json()
+
+
+def nq_get_mmr(discord_id):
+    """(mmr_float, last_match_unix, total_games) for the shared queue, or None. (sync)
+
+    Reads queues[DECAY_QUEUE_NAME]: .mmr (authoritative queue MMR, NOT top-level
+    `points`), .totalgames (for placement exemption), and the player-level
+    last_match_end (unix seconds, last match end across queues). Returns None if
+    the player has no NeatQueue record or the shared-queue entry is absent."""
+    p = nq_get_player(discord_id)
+    if not p:
+        return None
+    q = (p.get("queues") or {}).get(DECAY_QUEUE_NAME)
+    if not q:
+        return None
+    mmr = q.get("mmr")
+    if mmr is None:
+        return None
+    last = p.get("last_match_end") or 0.0
+    total = q.get("totalgames") or 0
+    return float(mmr), float(last), int(total)
+
+
+def nq_recent_match_count(hours=24):
+    """Count completed matches in the last N hours. (sync)
+
+    Used by the decay sweep to detect a 'dead day' (no matches -> nobody could
+    play -> unfair to decay). Returns -1 when history can't be fetched, so callers
+    treat it conservatively (proceed with decay rather than mass-exempt on a
+    transient API failure, which would risk rank inflation)."""
+    history = nq_history()
+    if not isinstance(history, list):
+        return -1
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    count = 0
+    for m in history:
+        if not isinstance(m, dict):
+            continue
+        try:
+            mt = datetime.strptime(m["time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except (KeyError, ValueError, TypeError):
+            continue
+        if mt >= cutoff:
+            count += 1
+    return count
 
 
 def list_teams(active_only=True):

@@ -85,4 +85,9 @@ The bot posts to the staff log channel automatically when:
 > `/weeklyreport` — Force-post the weekly leaderboard (normally auto-posted Monday 12:00 UTC).
 
 > `/syncroles` — Bulk-grant the Registered role to everyone who has a Players record. Use after a migration or if roles are out of sync.
+
+**Decay & Eligibility**
+> `/decaystatus` — Check a player's current MMR, idle days, decay tier (Champs vs non-Champs), and pending decay amount. Defaults to yourself if no member given.
+
+> `/decayrun` — Run the daily decay & 800-point eligibility sweep now (normally once a day at 00:05 UTC). Skips everyone on 'dead days' (no matches in 24h). Details go to the staff log.
 ```

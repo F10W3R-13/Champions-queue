@@ -242,6 +242,7 @@ _core2.player_directory_cached = lambda: {pid: ("F10W3R", "floo")}
 # Build a minimal cog instance without Discord wiring.
 class _FakeBot:
     async def get_channel(self, cid): return None
+    def get_cog(self, name): return None  # decay hook no-op when no cog present
 cog = _mmr.MMRModifier.__new__(_mmr.MMRModifier)
 cog.bot = _FakeBot()
 cog.processed, cog.backfilled, cog.applied = set(), set(), set()
@@ -384,5 +385,193 @@ print("impact window (participant + cluster to far match):", clust2[_pid_a])
 _core2.hp_table = _orig_hp
 _core2.snd_table = _orig_snd
 print("MMR impact window overlap contamination test OK")
+
+# ---- Decay cog: compute_daily_decay tiers + floor (now tier-parameterized) ----
+from cogs import decay as _decay
+
+# Champs tier params (defaults): grace=7, rate=10, escalate_after=14, escalate_rate=20.
+_champs_tier = _decay._tier_for(is_champs=True)
+_nonchamps_tier = _decay._tier_for(is_champs=False)
+
+# Within grace -> 0.
+assert _decay.compute_daily_decay(7, 1000, grace=7, rate=10, escalate_after=14, escalate_rate=20) == 0
+# 8 days idle -> base tier (rate 10).
+assert _decay.compute_daily_decay(8, 1000, grace=7, rate=10, escalate_after=14, escalate_rate=20) == 10
+# 13 days -> still base.
+assert _decay.compute_daily_decay(13, 1000, grace=7, rate=10, escalate_after=14, escalate_rate=20) == 10
+# 14 days -> escalate (rate 20).
+assert _decay.compute_daily_decay(14, 1000, grace=7, rate=10, escalate_after=14, escalate_rate=20) == 20
+# Floor protection: at 705 with rate 10, only 5 lost (headroom to floor 700).
+assert _decay.compute_daily_decay(10, 705, grace=7, rate=10, escalate_after=14, escalate_rate=20) == 5
+# At/below floor -> 0.
+assert _decay.compute_daily_decay(10, 700, grace=7, rate=10, escalate_after=14, escalate_rate=20) == 0
+print("compute_daily_decay (Champs tier) OK")
+
+# Non-Champs tier (gentler): grace=21, rate=5, escalate_after=35, escalate_rate=10.
+_g, _r, _ea, _er = _nonchamps_tier
+assert (_g, _r, _ea, _er) == (21, 5, 35, 10), ("non-Champs tier defaults", _nonchamps_tier)
+assert _decay.compute_daily_decay(22, 1000, grace=_g, rate=_r, escalate_after=_ea, escalate_rate=_er) == 5
+assert _decay.compute_daily_decay(36, 1000, grace=_g, rate=_r, escalate_after=_ea, escalate_rate=_er) == 10
+print("compute_daily_decay (non-Champs tier) OK")
+
+# ---- Test D: tier differential — same idle_days yields different decay by tier ----
+# 8 days idle: Champs decay 10, non-Champs decay 0 (within their 21-day grace).
+champs_amt = _decay.compute_daily_decay(8, 1000, grace=7, rate=10, escalate_after=14, escalate_rate=20)
+nonchamps_amt = _decay.compute_daily_decay(8, 1000, grace=21, rate=5, escalate_after=35, escalate_rate=10)
+assert champs_amt == 10 and nonchamps_amt == 0, ("tier differential", champs_amt, nonchamps_amt)
+print("Tier differential test D OK: Champs %d vs non-Champs %d at 8d idle" % (champs_amt, nonchamps_amt))
+
+# ---- shared scaffolding for sweep-level tests ----
+_core2.DECAY_DRYRUN = False
+_did = "111"
+_pid = "recF"
+_now = _dt2.datetime.now(_dt2.timezone.utc)
+_last = _now - _dt2.timedelta(days=8)   # 8 days idle
+
+def _fake_get_mmr(discord_id):
+    return (980.0, _last.timestamp(), 10)  # idle 8d, above placement
+_orig_get_mmr = _core2.nq_get_mmr
+_core2.nq_get_mmr = _fake_get_mmr
+
+_decay_calls = []
+def _fake_decay_add(user_id, value, channel_id=None):
+    _decay_calls.append((str(user_id), int(value)))
+    return {"ok": True}
+_orig_decay_add = _core2.nq_add_mmr
+_core2.nq_add_mmr = _fake_decay_add
+
+_orig_recent = _core2.nq_recent_match_count
+_core2.nq_recent_match_count = lambda hours=24: 5   # queue alive (not a dead day)
+_core2.discord_id_map = lambda: {_did: _pid}
+_core2.send_staff_log = _no_log
+
+# Fake guild: member is NOT a Champs holder (no role match) -> non-Champs tier.
+# With 8 days idle and non-Champs grace=21, decay should be 0.
+class _FakeGuild:
+    def __init__(self, has_champs=False):
+        self._has = has_champs
+        self._role = object()  # sentinel role object
+    def get_role(self, rid):
+        return self._role if self._has else object()  # champs_role resolves only if has
+    def get_member(self, mid):
+        class _M:
+            def __init__(self, inner_has, inner_role):
+                self.roles = [inner_role] if inner_has else []
+        return _M(self._has, self._role if self._has else object())
+class _FakeGuildBot(_FakeBot):
+    def __init__(self, has_champs=False):
+        self.guild = _FakeGuild(has_champs)
+    def get_guild(self, gid): return self.guild
+
+# ---- Test E: dead-day exemption ----
+# nq_recent_match_count==0 -> everyone exempt, dead_days accrues, no decay applied.
+dcog_dead = _decay.Decay.__new__(_decay.Decay)
+dcog_dead.bot = _FakeGuildBot(has_champs=True)
+dcog_dead.decay_applied = set()
+dcog_dead.below_threshold = set()
+dcog_dead.dead_days = 3
+_core2.nq_recent_match_count = lambda hours=24: 0   # dead day
+_decay_calls.clear()
+asyncio.get_event_loop().run_until_complete(dcog_dead.run_sweep())
+assert _decay_calls == [], ("dead day must not decay anyone", _decay_calls)
+assert dcog_dead.dead_days == 4, ("dead_days should increment", dcog_dead.dead_days)
+# Effective grace extension: with 4 dead_days, a Champs player idle 8d has effective
+# grace 7+4=11, so 8d is still within grace even for Champs. Verify via compute.
+eff = _decay.compute_daily_decay(8, 980, grace=7+4, rate=10, escalate_after=14+4, escalate_rate=20)
+assert eff == 0, ("dead-day grace extension should keep 8d within grace", eff)
+print("Dead-day exemption test E OK: no decay, dead_days=%d, grace extended" % dcog_dead.dead_days)
+
+# Queue alive again -> dead_days reset, and an idle Champs player DOES decay.
+_core2.nq_recent_match_count = lambda hours=24: 5
+dcog_alive = _decay.Decay.__new__(_decay.Decay)
+dcog_alive.bot = _FakeGuildBot(has_champs=True)
+dcog_alive.decay_applied = set()
+dcog_alive.below_threshold = set()
+dcog_alive.dead_days = 4
+_decay_calls.clear()
+asyncio.get_event_loop().run_until_complete(dcog_alive.run_sweep())
+assert dcog_alive.dead_days == 0, ("alive day should reset dead_days", dcog_alive.dead_days)
+assert _decay_calls == [(_did, -10)], ("Champs 8d idle should decay -10", _decay_calls)
+print("Dead-day reset test E2 OK: dead_days reset to 0, Champs decayed")
+
+# ---- double-apply within the same day is prevented (decay_applied set) ----
+dcog = _decay.Decay.__new__(_decay.Decay)
+dcog.bot = _FakeGuildBot(has_champs=True)
+dcog.decay_applied = set()
+dcog.below_threshold = set()
+dcog.dead_days = 0
+_decay_calls.clear()
+n1 = asyncio.get_event_loop().run_until_complete(dcog.run_sweep())
+assert _decay_calls == [(_did, -10)], _decay_calls
+_date_key = _decay._decay_key(_now.strftime("%Y-%m-%d"), _did)
+assert _date_key in dcog.decay_applied, "decay_applied should record day|player"
+# Pass 2 same day -> guard prevents second call.
+_decay_calls.clear()
+asyncio.get_event_loop().run_until_complete(dcog.run_sweep())
+assert _decay_calls == [], ("REGRESSION: same-day re-run re-decayed", _decay_calls)
+print("Decay double-apply regression OK")
+
+# ---- dry-run must not stamp decay_applied or dead_days ----
+_core2.DECAY_DRYRUN = True
+dcog2 = _decay.Decay.__new__(_decay.Decay)
+dcog2.bot = _FakeGuildBot(has_champs=True)
+dcog2.decay_applied = set()
+dcog2.below_threshold = set()
+dcog2.dead_days = 0
+_decay_calls.clear()
+asyncio.get_event_loop().run_until_complete(dcog2.run_sweep())
+assert _decay_calls == [], "dry-run must not call nq_add_mmr"
+assert _date_key not in dcog2.decay_applied, "REGRESSION: dry-run stamped decay_applied"
+# Dry-run on a dead day must NOT increment dead_days.
+dcog2.dead_days = 2
+_core2.nq_recent_match_count = lambda hours=24: 0
+asyncio.get_event_loop().run_until_complete(dcog2.run_sweep())
+assert dcog2.dead_days == 2, ("dry-run must not increment dead_days", dcog2.dead_days)
+print("Decay dry-run does not stamp state regression OK")
+_core2.DECAY_DRYRUN = False
+_core2.nq_recent_match_count = lambda hours=24: 5
+
+# ---- floor protection in live sweep ----
+def _near_floor_mmr(discord_id):
+    return (705.0, (_now - _dt2.timedelta(days=10)).timestamp(), 10)
+_core2.nq_get_mmr = _near_floor_mmr
+dcog3 = _decay.Decay.__new__(_decay.Decay)
+dcog3.bot = _FakeGuildBot(has_champs=True)
+dcog3.decay_applied = set()
+dcog3.below_threshold = set()
+dcog3.dead_days = 0
+_decay_calls.clear()
+asyncio.get_event_loop().run_until_complete(dcog3.run_sweep())
+assert _decay_calls == [(_did, -5)], ("floor should clamp to -5", _decay_calls)
+print("Decay floor protection regression OK:", _decay_calls)
+
+# ---- Test F: gate applies ONLY to Champs holders ----
+# Player at 790 (< 800 threshold) but NOT a Champs holder -> must not be gated.
+def _below_mmr(discord_id):
+    return (790.0, (_now - _dt2.timedelta(days=2)).timestamp(), 10)
+_core2.nq_get_mmr = _below_mmr
+dcogF = _decay.Decay.__new__(_decay.Decay)
+dcogF.bot = _FakeGuildBot(has_champs=False)   # non-Champs
+dcogF.decay_applied = set()
+dcogF.below_threshold = set()
+dcogF.dead_days = 0
+asyncio.get_event_loop().run_until_complete(dcogF.run_sweep())
+assert _did not in dcogF.below_threshold, ("non-Champs must not be gated", dcogF.below_threshold)
+print("Gate Champs-only test F OK: non-Champs at 790 not gated")
+# Same player as a Champs holder -> IS gated.
+dcogF2 = _decay.Decay.__new__(_decay.Decay)
+dcogF2.bot = _FakeGuildBot(has_champs=True)
+dcogF2.decay_applied = set()
+dcogF2.below_threshold = set()
+dcogF2.dead_days = 0
+asyncio.get_event_loop().run_until_complete(dcogF2.run_sweep())
+assert _did in dcogF2.below_threshold, ("Champs below threshold must be gated", dcogF2.below_threshold)
+print("Gate Champs-only test F2 OK: Champs at 790 gated")
+
+# restore patched symbols
+_core2.nq_get_mmr = _orig_get_mmr
+_core2.nq_add_mmr = _orig_decay_add
+_core2.nq_recent_match_count = _orig_recent
+_core2.DECAY_DRYRUN = os.getenv("DECAY_DRYRUN", "1") == "1"
 
 print("\nALL SMOKE TESTS PASSED")

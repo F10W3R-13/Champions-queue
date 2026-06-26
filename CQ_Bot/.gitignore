@@ -13,6 +13,8 @@ __pycache__/
 
 # ===== Runtime state =====
 mmr_state.json
+decay_state.json
+queue_state.json
 *.state.json
 *.sqlite
 *.db

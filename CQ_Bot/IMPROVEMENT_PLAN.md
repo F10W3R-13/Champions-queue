@@ -111,7 +111,8 @@ Airtable  Players / HP / SND / Aliases 4테이블에 기록
 - `/seasonreport` (스태프) — 모드별 Top 10 + 어워드 8종 + Grinder 결산 초안을 스태프 채널에 게시
 - 신규 파일: `cogs/season.py` / 수정: `core.py`, `main.py`, `cogs/stats.py`
 - ⚠️ 선행 조건: Airtable HP/SND 테이블에 `Season` 필드(Single line text) 추가 필수
-- 보류: MMR 소프트 리셋 (Phase 7-1 NeatQueue API 검증에 종속), 비활동 decay는 NeatQueue 설정으로 처리
+- 보류: MMR 소프트 리셋 (Phase 7-1 NeatQueue API 검증에 종속)
+- ✅ 비활동 decay는 Phase 11에서 봇이 직접 구현 (NeatQueue 자체 decay는 비활성 — 이중 감점 없음)
 
 ### Phase 10 — 고급 지표 + Airtable 이관 ✅ 구현 완료 (2026-06-12)
 - DPD/DPK/Assist%/ZCS를 Airtable **수식 필드**로 생성 (Players: `HP DPD`, `HP DPK`, `HP Assist %`, `HP ZCS`, `SND Assist %`)
@@ -162,3 +163,12 @@ Airtable  Players / HP / SND / Aliases 4테이블에 기록
 - [ ] matcher 임계값 실데이터 보정 (T_HIGH 0.92 / T_LOW 0.75 / MARGIN 0.08)
 - [ ] OCR 모델 비교 (gpt-4.1 vs gpt-4.1-mini)
 - [ ] MMR 소프트 리셋 (시즌 종료 시)
+
+### Phase 11 — 휴면 MMR 부식 & 800 자격 게이트 (하이브리드) ✅ 구현 완료 (2026-06-26)
+- **계층별 차등 감점**: Champs 보유자(대회 의무)는 정상 감점(7일 면죄 → −10/일 → 14일+ −20/일). 비-Champs(미성년자/일반)는 관대 감점(21일 면죄 → −5/일 → 35일+ −10/일). 일반/참가팀 큐가 하나의 MMR 풀(sharedstats)이라 완전 면제 시 '놀고먹음' 역불공정 → 관대하게만.
+- **dead-day 전원 면제 + 동적 grace**: 최근 24h 매치 0건이면 전원 면제, `dead_days` 증가 → `effective_grace = base + dead_days`로 grace 연장 (큐가 죽은 기간엔 grace 안 소모). 매치 발생 시 리셋.
+- **800 자격 게이트는 Champs만**: 800 미만 → `Registered` 역할 박탈, 회복 시 자동 복구. 단 Champs 보유자에게만 (비-Champs는 경쟁 풀 밖).
+- 매치 후 준실시간 훅(cogs/mmr.py) + 매일 00:05 UTC 전수 스윕의 이중 안전망. 하한 700.
+- 멱등성: `decay_applied` 셋(하루 1회), `below_threshold` diff(역할 토글 중복 방지), `dead_days`(grace 연장). dry-run엔 셋·dead_days 모두 미기록.
+- 신규 파일: `cogs/decay.py` / 수정: `core.py`(nq_get_mmr, nq_recent_match_count 등), `cogs/mmr.py`(훅), `main.py`, `_smoke_test.py`, `CLAUDE.md`
+- ⚠️ 배포 전 `.env`에서 `DECAY_DRYRUN=1` 유지 → 스태프 로그 리포트 확인 후 `DECAY_DRYRUN=0` 전환

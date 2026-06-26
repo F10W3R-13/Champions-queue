@@ -31,6 +31,7 @@
 - **시즌**: 시즌 기간, 주간 리더보드, 시즌 리포트
 - **MMR modifier**: Impact 기반 ±10 추가 점수 (NeatQueue base 위에)
 - **큐 리마인더 + 잠금 자동화**: T-2h/T-30min/LIVE 알림, 3시간 윈도우 잠금 제어, RSVP
+- **휴면 부식 & 800 자격 게이트**: 7일 이상 휴면 MMR 가속 감점(700 하한), 800 미만 Registered 역할 박탈/자동 복구, 매치 후 준실시간 훅
 - **자가역할**: region/weapon/team 셀렉터, `/clearteam`
 
 ### 데이터 흐름
@@ -68,6 +69,7 @@ Champion's Queue/                         # repo root
     │   ├── ingest.py                # on_message OCR, 45s reconcile loop, /review /link /unlink /reject
     │   ├── season.py                # /season /seasonreport /weeklyreport, weekly leaderboard loop
     │   ├── mmr.py                   # Impact-MMR 10min loop, /applymodifiers, /backfillmodifiers, per-player backfill, public mirror
+    │   ├── decay.py                 # 휴면 MMR 부식(일일 루프) + 800 자격 게이트(Registered 역할 토글), /decaystatus /decayrun, 준실시간 훅
     │   ├── selfroles.py             # /rolepanel, region/weapon/team pickers, /clearteam, on_member_update tag cleanup
     │   ├── verify.py                # /verifypanel, access application flow
     │   └── queue.py                 # reminder_loop (매분), RSVP 패널, lock/unlock, manual-open 보호, /queuepanel
@@ -128,6 +130,24 @@ Champion's Queue/                         # repo root
 | `QUEUE_STATE_FILE` | `queue_state.json` | RSVP + dedup 영속화 |
 | `QUEUE_REMINDER_ENABLED` | `1` | 0 = 루프 비활성 |
 
+### 부식 & 자격 게이트 설정
+| 변수 | 기본값 | 용도 |
+|---|---|---|
+| `DECAY_ENABLED` | `1` | 0 = 루프 비활성 |
+| `DECAY_DRYRUN` | `1` (dry-run) | 1 = 리포트만 (적용·역할 박탈 안 함) |
+| `DECAY_GRACE_DAYS` | `7` | 마지막 매치 후 면죄 일수 |
+| `DECAY_RATE` | `10` | 기본 티어 일일 감점량 |
+| `DECAY_ESCALATE_AFTER_DAYS` | `14` | 이 일수부터 2배 티어 |
+| `DECAY_ESCALATE_RATE` | `20` | Champs 가속 티어 일일 감점량 |
+| `DECAY_GRACE_DAYS_NONCHAMPS` | `21` | 비-Champs(미성년자/일반) 면죄 일수 |
+| `DECAY_RATE_NONCHAMPS` | `5` | 비-Champs 기본 티어 일일 감점량 |
+| `DECAY_ESCALATE_AFTER_DAYS_NONCHAMPS` | `35` | 비-Champs 2단계 진입일 |
+| `DECAY_ESCALATE_RATE_NONCHAMPS` | `10` | 비-Champs 가속 티어 일일 감점량 |
+| `DECAY_FLOOR` | `700` | MMR 하한 (이 이하로는 안 떨어짐) |
+| `DECAY_THRESHOLD` | `800` | 이 미만 = Registered 역할 박탈 |
+| `DECAY_QUEUE_NAME` | `Champion's Queue` | sharedstats 통합 큐 이름 (MMR 읽기 소스) |
+| `DECAY_STATE_FILE` | `decay_state.json` | decay_applied / below_threshold 영속화 |
+
 ---
 
 ## 5. 슬래시 명령 (19개)
@@ -141,7 +161,7 @@ Champion's Queue/                         # repo root
 | `/leaderboard` | 리더보드 |
 | `/season` | 현재 시즌 정보 |
 
-### Staff (14)
+### Staff (16)
 | 명령 | 설명 |
 |---|---|
 | `/syncroles` | 전체 Registered 역할 동기화 |
@@ -158,6 +178,8 @@ Champion's Queue/                         # repo root
 | `/verifypanel` | 인증 패널 게시 |
 | `/queuepanel` | RSVP 패널 수동 게시 (테스트용) |
 | `/ignhelp` | IGN 등록 가이드 패널 게시 |
+| `/decaystatus [member]` | 플레이어 MMR/휴면일/부식 상태 조회 |
+| `/decayrun` | 일일 부식 & 자격 스윕 즉시 실행 |
 
 ---
 
@@ -207,6 +229,21 @@ Champion's Queue/                         # repo root
 - `/clearteam`: 역할 + Airtable Team + 닉네임 [TAG] 한 번에 제거
 - `on_member_update`: Champs 역할 제거 시 자동 닉네임 태그 제거 (이중 안전망)
 
+### 6.7 휴면 MMR 부식 & 800 자격 게이트 (하이브리드)
+- **계층별 차등 감점 (TIERING)**: 일반큐와 참가팀큐는 sharedstats로 **하나의 MMR 풀**을 공유. 비-참가팀(미성년자/일반 멤버)은 참가팀큐에 구조적 접근 불가이므로 **완전 면제**하면 같은 풀에서 '놀고먹음' 역불공정. 따라서 Champs 보유자(대회 의무)는 **정상 감점**, 비-Champs는 **관대 감점**(면죄 21일, −5/일). 두 가치(MMR 통합 유지 + 놀고먹음 방지)를 동시 충족.
+- **dead-day 전원 면제**: 매일 스윕 시작 시 `nq_recent_match_count(24)`로 최근 24h 매치 수 확인 → 0건이면 그 날은 **전원 decay 면제** + `dead_days` 증가. "뛸 수 없었으니 깎을 수 없다" (큐가 비어 있으면 누구도 뛸 수 없음).
+- **동적 grace (dead_days 연장)**: `effective_grace = base_grace + dead_days`. 큐가 N일 연속 죽었으면 grace도 N일 연장 → 부당 감점 원천 차단. 매치 발생 시 `dead_days=0` 리셋.
+- **부식 규칙 (Champs)**: 마지막 매치 후 `DECAY_GRACE_DAYS`(7일) 면죄 → 8일차~13일 매일 `−DECAY_RATE`(10) → 14일차부터 매일 `−DECAY_ESCALATE_RATE`(20). `DECAY_FLOOR`(700) 이하로는 안 떨어짐.
+- **부식 규칙 (비-Champs)**: 면죄 `DECAY_GRACE_DAYS_NONCHAMPS`(21일) → 그 후 매일 `−DECAY_RATE_NONCHAMPS`(5) → 35일차부터 `−DECAY_ESCALATE_RATE_NONCHAMPS`(10). 하한 동일 700.
+- **NeatQueue decay 비활성 확인**: NQ 자체 decay는 꺼져 있어 이중 감점 없음 (2026-06-26 검증).
+- **자격 게이트 (Champs만)**: `DECAY_THRESHOLD`(800) 미만 → `Registered` 역할 제거 (NeatQueue 큐 입장 게이트). 800 이상 회복 → 자동 재부여. **Champs 보유자에게만 적용** (비-Champs는 경쟁 풀 밖). `below_threshold` 셋 diff로 상태가 바뀐 사람만 토글.
+- **준실시간 훅**: `cogs/mmr.py`의 `apply_modifiers_for_match` 말미에서 매치 참가자 각각에 대해 `Decay.check_threshold_for_player` 호출. 단 Champs 보유자만 게이트 (부식은 일일 루프 전담).
+- **면제**: `PLACEMENT_GAMES` 미만(기본 5경기)은 부식·박탈 모두 제외 (신규가입자 보호).
+- **MMR 읽기**: `GET /api/v1/playerstats` → `queues["Champion's Queue"].mmr` (top-level `points`가 아님). 마지막 매치 시각은 `last_match_end`.
+- **이중적용 방지 (decay_applied 셋)**: 키 `{date}|{discord_id}`로 하루 1회 부식 강제. **dry-run엔 decay_applied·dead_days 모두 미기록** (§9.9와 동일 원리 — LIVE 전환 시 누락 방지).
+- **`DECAY_DRYRUN=1` 기본**: `MMR_MODIFIER_DRYRUN`과 독립. dry-run에선 부식·역할 토글·dead_days 증가 모두 리포트만.
+- **DM 알림**: 박탈/복구 시 플레이어에게 디엠 (registration.py DM 패턴).
+
 ---
 
 ## 7. Airtable 스키마
@@ -241,6 +278,7 @@ python _smoke_test.py                             # 전체 회귀 테스트
 
 ### 상태 파일 (서버에만 존재, gitignored)
 - `mmr_state.json` — `processed` / `backfilled` / `applied` 셋
+- `decay_state.json` — `decay_applied` (하루 1회 부식 멱등) / `below_threshold` (Champs 현재 박탈 집합, 역할 토글 diff) / `dead_days` (누적 큐 비활성일, 동적 grace 연장)
 - `queue_state.json` — RSVP 명단 / `fired` 키 / `manual_open` / `live_dmed`
 
 ---
@@ -256,12 +294,18 @@ python _smoke_test.py                             # 전체 회귀 테스트
 7. **`/clearteam` description ≤ 100자**: Discord 제한. 초과 시 `tree.sync()` 전체 실패.
 8. **MMR modifier 이중적용 (회귀 원인)**: `apply_modifiers_for_match`는 `nq_add_mmr` 호출 **직후**에 `self.applied.add()` 로 (player, match) 를 기록하지만, **그 뒤 embed 생성 단계에서 예외가 나면** `process_new_matches`가 중단되어 `processed.add()` 까지 도달 못 함 → 다음 루프가 같은 매치를 재처리. per-match 루프가 `applied` 셋을 **읽지 않았던** 시절에는 같은 선수에게 modifier가 반복 적용되어 MMR이 비정상 급등. **3중 방어**: (a) per-match 루프도 적용 전 `applied` 체크, (b) `process_new_matches`에 per-match try/except로 1개 매치 크래시가 전체 패스 중단을 막음, (c) 매치는 processed 마킹하여 재진입 차단. 회귀 테스트는 `_smoke_test.py` 의 "MMR double-apply regression" 항목.
 9. **MMR dry-run + `applied` 셋 부적절 마킹**: per-player backfill이 dry-run 중에도 `applied.add()` 했던 과거 버그. 실제로는 아무것도 적용하지 않았으므로, 나중에 LIVE 전환 시 그 (player, match) 가 영구 누락됨. **dry-run일 땐 절대 `applied` 에 쓰지 않는다** (neutral `mod==0` 는 예외 — 0은 적용 여부와 무관).
+10. **Decay 이중감점 / dry-run `decay_applied` 마킹**: decay 코그도 §9.8·§9.9와 동일한 위험을 가짐. (a) 같은 날 재실행(재시작·수동 트리거) 시 같은 플레이어가 두 번 깎이면 안 됨 → `decay_applied` 셋(키 `{date}|{discord_id}`)로 하루 1회 강제. (b) dry-run 중에 이 셋에 쓰면 LIVE 전환 후 그 날짜-플레이어가 영구 누락 → **dry-run엔 절대 쓰지 않는다**. (c) 역할 토글은 `below_threshold` diff로 상태가 바뀐 사람만 → 매번 전체 remove_roles 중복 방지. 회귀 테스트는 `_smoke_test.py` 의 "Decay double-apply" / "dry-run stamp" / "floor protection" 항목.
+11. **NeatQueue `points` ≠ 큐 MMR**: `GET /api/v1/playerstats` 응답의 top-level `points`(보통 1000)는 authoritative 큐 MMR이 아님 — `queues[DECAY_QUEUE_NAME].mmr`를 읽어야 함. sharedstats 통합으로 여러 큐 entry가 응답에 중첩되므로 큐 이름 매핑 주의. (2026-06-26 프로브로 확인: F10W3R `points=1000` vs `queues["Champion's Queue"].mmr=1023`)
+12. **Decay dead-day 동적 grace — 큐가 죽은 기간에 grace를 소모하면 부당 감점**: 큐가 비어 아무도 뛸 수 없었던 날(dead-day)에 decay를 부과하면 '구조적 불가' 상태의 플레이어를 부당하게 벌줌. **해결**: `nq_recent_match_count(24)==0`이면 그 날 전원 면제 + `dead_days` 증가 → `effective_grace = base_grace + dead_days`로 grace를 연장. 매치 발생 시 `dead_days=0` 리셋. **dry-run엔 dead_days도 미기록** (LIVE 전환 시 누락 방지, §9.9/§9.10과 동일 원리). 회귀 테스트는 `_smoke_test.py` 의 "Dead-day exemption" 항목.
+13. **Decay 계층 분기 — 하나의 MMR 풀 + 의무/비의무 계층 역설**: 일반큐와 참가팀큐가 sharedstats로 **하나의 MMR 풀**을 공유. 비-참가팀(미성년자)을 decay에서 완전 면제하면 같은 풀에서 '놀고먹음' 역불공정, 전체 적용하면 '뛸 수 없는데 벌' 부당. **해결**: Champs 보유자(대회 의무)는 정상 감점, 비-Champs는 관대 감점(면죄 21일/−5/일). 800 자격 게이트도 **Champs 보유자에게만** 적용 (비-Champs는 경쟁 풀 밖). `_member_has_champs`는 `get_member` None이면 비-Champs 취급 (보수적). 회귀 테스트는 `_smoke_test.py` 의 "Tier differential" / "Gate Champs-only" 항목.
 
 ---
 
 ## 10. 업데이트 지침 (이 문서를 유지하는 규칙)
 
 **이 섹션은 CLAUDE.md를 단일 진실 원천으로 유지하기 위한 규칙이다.**
+
+> **핵심 원칙 — 능동적 기록**: 이 문서는 살아있는 단일 진실 원천이다. 주요 코드·기능·설정·스키마 변경을 할 때마다, 작업자(에이전트 포함)는 **별도 지시를 기다리지 않고 스스로 판단하여** 이 문서의 알맞은 섹션에 변경사항을 구조에 맞게 기록한다. 아래 체크리스트는 '어디에 기록할지'의 가이드일 뿐, 기록 자체는 **모든 주요 업데이트에서 의무적**이다. 기록이 누락된 변경은 완료로 간주하지 않는다.
 
 ### 언제 업데이트하나
 다음 상황이 발생하면 **커밋 전에 반드시** 해당 섹션을 갱신한다:
@@ -280,11 +324,12 @@ python _smoke_test.py                             # 전체 회귀 테스트
 - 다른 문서와 충돌하면 **CLAUDE.md가 우선**.
 - 헤더의 **"Last updated" 날짜**를 매 업데이트마다 갱신.
 
-### 주기적 업데이트
-- **특정 태스크나 업무가 끝날 때마다** 이 문서의 관련 섹션을 확인하고 갱신한다.
-- 큰 기능 추가 후: §6에 새 섹션 추가 + §5 명령 + §4 환경변수 점검.
-- 버그 수정 후: §9에 함정으로 등록 (재발 방지).
+### 능동적 갱신 원칙
+- **모든 주요 작업(기능 추가·버그 수정·설정/스키마 변경·리팩터) 종료 전**, 작업자가 스스로 이 문서의 관련 섹션을 점검하고 갱신한다. 커밋 전 단계이며, 누군가 지시하기를 기다리지 않는다.
+- 큰 기능 추가 후: §6에 새 섹션 추가 + §5 명령 + §4 환경변수 점검 + 형제 문서(IMPROVEMENT_PLAN.md 로드맵, COMMANDS_GUIDE.md 사용자용 블록) 동기화.
+- 버그 수정 후: §9에 함정으로 등록 (재발 방지) + 해당 회귀에 대한 `_smoke_test.py` 항목 점검.
 - 시즌 전환 시: §7 스키마 변경사항 반영.
+- **판단 기준**: 변경이 이 문서의 어느 섹션에도 영향을 주지 않는다고 확신할 때만 기록을 생략한다. 확신이 없으면 기록한다.
 
 ---
 

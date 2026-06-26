@@ -38,6 +38,8 @@ venv.bak/
 # ===== Runtime state (bot-generated) =====
 # bot.log covered by *.log below; runtime JSON state must not be committed.
 mmr_state.json
+decay_state.json
+queue_state.json
 *.state.json
 *.sqlite
 *.sqlite3
