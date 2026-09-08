@@ -109,7 +109,7 @@ Champion's Queue/                         # repo root
 | `RESULTS_CHANNEL_ID` | `1512331781758652546` | #results — 스크린샷 업로드 + MMR 공개 미러 |
 | `STAFF_LOGS_CHANNEL_ID` | `1512332329735950386` | staff 로그/알림 |
 | `WEEKLY_LEADERBOARD_CHANNEL_ID` | `0` (→ staff logs) | 주간 리더보드 |
-| `MMR_PUBLIC_CHANNEL_ID` | `0` (비활성) | MMR modifier 공개 요약 미러 |
+| `MMR_PUBLIC_CHANNEL_ID` | `0` (비활성) | MMR modifier 공개 요약 미러. **실제 .env 값: `1512331781758652546` (#results) — 활성 상태** (2026-09-09 확인). modifier가 적용될 때마다 #results에 플레이어용 요약 게시 |
 | `IGN_HELP_CHANNEL_ID` | `0` | #ign — 등록 가이드 패널 |
 | `QUEUE_JOIN_CHANNEL_ID` | `1514827048885948516` | #queue-2026champs — NeatQueue join 버튼 |
 | `QUEUE_REMINDER_CHANNEL_ID` | `0` (→ join 채널) | 리마인더/RSVP 발화 채널 |
@@ -200,7 +200,7 @@ Champion's Queue/                         # repo root
 - **6.3 OCR 수집**: #results 이미지 2장 → GPT-4.1 vision → Airtable, 45초 reconcile 루프, 3-stage matcher, `/review`·`/link`·`/unlink`·`/reject`
 - **6.4 MMR modifier**: 10분 루프, impact 공식 `round((impact-130)/70*10)` ±10, 시간창 `[mtime-2h,+4h]` + 참가자 필터/시리즈 클러스터링, 3중 이중적용 방어, backfill, 공개 미러
 - **6.5 큐 리마인더 & 잠금**: 매분 루프(NA 23:00 ET / EU 23:00 CET), T-2h→T-30min→LIVE→+3h lock, RSVP 패널+LIVE DM, manual-open 보호(24h)
-- **6.6 자가역할 & 팀**: `/rolepanel`, `/clearteam`(역할+Airtable+닉네임 태그), `on_member_update` 태그 정리
+- **6.6 자가역할 & 팀**: `/rolepanel`, `/clearteam`(역할+Airtable+닉네임 태그), `on_member_update` 태그 정리. **Weapon 셀렉터는 채택률 84%(137/163명, 2026-09-09 Discord 조사)로 KEEP 확정** — 통계에 안 쓰여도 소셜 표식으로 기능 중. 단순 "미사용=제거" 가설은 데이터로 기각된 사례
 - **6.7 휴면 부식 & 800 게이트**: Champs 정상(7일 grace, −10/−20) vs 비-Champs 관대(21일, −5/−10), floor 700, dead-day 전원 면제+동적 grace, **재가동 사면(`DECAY_EPOCH` — idle을 max(마지막 매치, epoch)부터 계산, 첫 스윕에 자동 핀)**, 800 미만 Champs만 Registered 박탈/자동 복구(**`DECAY_GATE_ENABLED=0`으로 중단 가능** — 박탈되면 매치로 회복할 수 없는 교착 구조), placement 5경기 면제, escalate_after에도 dead-days 연장 적용
 
 ---
