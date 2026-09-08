@@ -99,7 +99,7 @@ Champion's Queue/                         # repo root
 |---|---|
 | `DISCORD_TOKEN` | 봇 토큰 |
 | `AIRTABLE_API_KEY` | Airtable Personal Access Token |
-| `AIRTABLE_BASE_ID` | `appm2BhtqdgYGFCMH` |
+| `AIRTABLE_BASE_ID` | `appm2BhtqdgYGFCMH` | (쿼터 고갈 시 신규 워크스페이스 복제본으로 교체 가능 — `AIRTABLE_QUOTA_RUNBOOK.md` 참조. 테이블 ID도 `*_TABLE_ID` env로 덮어쓰기 가능) |
 | `OPENAI_API_KEY` | GPT-4.1 vision OCR용 |
 | `NEATQUEUE_TOKEN` | NeatQueue REST API (raw token, Bearer 없음) |
 
@@ -152,7 +152,7 @@ Champion's Queue/                         # repo root
 | `DECAY_STATE_FILE` | `decay_state.json` | decay_applied / below_threshold 영속화 |
 | `DECAY_EPOCH` | `''` (자동 핀) | **재가동 사면 기준일**. idle 일수는 max(마지막 매치, epoch)부터 계산 — 재가동 전 결장이 감점 절벽(−20/일)으로 이어지지 않게 하는 안전장치. 비어 있으면 배포 후 첫 스윕이 당일로 핀하고 state에 영속화. 명시적 ISO 날짜 지정 가능 |
 | `DECAY_GATE_ENABLED` | `1` | 800 자격 게이트(Registered 박탈) 마스터 스위치. **게이트는 구조적 교착이 있다** — Registered 박탈 시 NeatQueue 입장이 막혀 매치로 MMR을 회복할 수 없음. 재가동 등 게이트를 중단할 때 `0` |
-| `RECONCILE_PERIOD_SECONDS` | `21600` (6h) | reconcile 안전망 루프 주기. **Airtable 월간 API 쿼터 보호** — 기존 45초 폴링은 월 ~15만 호출을 소진시켜 워크스페이스 쿼터를 고갈시킴(Free 1,000/월 하드스톱, 매월 1일 리셋). 성시즌에 45로 되돌릴 수 있음 |
+| `RECONCILE_PERIOD_SECONDS` | `43200` (12h) | reconcile 안전망 루프 주기. **Airtable 월간 API 쿼터 보호** — 기존 45초 폴링은 월 ~15만 호출을 소진시켜 워크스페이스 쿼터를 고갈시킴(Free 1,000/월 하드스톱, 매월 1일 리셋). 성시즌에 45로 되돌릴 수 있음 |
 | `QUOTA_BACKOFF_SECONDS` | `86400` (24h) | Airtable 월간 한도(429 billing) 감지 시 reconcile 루프의 자동 백오프 주기 |
 | `MATCH_RETRY_PASSES` | `6` | MMR impact 데이터 재시도 상한(패스 수, 10분 루프 기준 ~1시간). 무제한 48h 재시도가 쿼터를 갉아먹는 것을 방지 |
 
@@ -196,7 +196,7 @@ Champion's Queue/                         # repo root
 > 전체 상세는 **`FEATURES_DETAIL.md`** — 해당 기능을 수정할 때 반드시 먼저 읽을 것.
 
 - **6.1 IGN 등록 & 인증**: `/ign` → Airtable+Registered 역할, `/link` 후 per-player MMR backfill, `/ignhelp` 패널, NeatQueue 거부 auto-helper
-- **6.2 통계 & 시즌**: `/stats`(DM)·`/leaderboard`, 시즌/주간 리포트 + 월요일 12:00 UTC 루프, Advanced 지표(DPD/DPK/ZCS/Assist %)
+- **6.2 통계 & 시즌**: `/stats`(DM)·`/leaderboard`(**지표 5종으로 축소 — 2026-09: K/D, Impact, Games, OBJ(HP), ADR(SND). 고급 지표는 /seasonreport·주간 포스트로 이동**), 시즌/주간 리포트 + 월요일 12:00 UTC 루프(**주간 3섹션: ZCS·DPD·Assist%(SND)**), Advanced 지표(DPD/DPK/ZCS/Assist %)는 /stats 카드에 유지
 - **6.3 OCR 수집**: #results 이미지 2장 → GPT-4.1 vision → Airtable, 45초 reconcile 루프, 3-stage matcher, `/review`·`/link`·`/unlink`·`/reject`
 - **6.4 MMR modifier**: 10분 루프, impact 공식 `round((impact-130)/70*10)` ±10, 시간창 `[mtime-2h,+4h]` + 참가자 필터/시리즈 클러스터링, 3중 이중적용 방어, backfill, 공개 미러
 - **6.5 큐 리마인더 & 잠금**: 매분 루프(NA 23:00 ET / EU 23:00 CET), T-2h→T-30min→LIVE→+3h lock, RSVP 패널+LIVE DM, manual-open 보호(24h)

@@ -104,11 +104,11 @@ class Season(commands.Cog):
         sections = [
             ("🛡️ Zone Control Score (HP)", ranked_lines(collect("HP Games", "HP ZCS"))),
             ("🩸 Damage per Death (HP)", ranked_lines(collect("HP Games", "HP DPD"))),
-            ("🎯 Damage per Kill (HP, lower = better)",
-             ranked_lines(collect("HP Games", "HP DPK"), ascending=True, filter_positive=True)),
-            ("🤝 Assist % (HP)", ranked_lines(collect("HP Games", "HP Assist %"), unit="%")),
             ("🤝 Assist % (SND)", ranked_lines(collect("SND Games", "SND Assist %"), unit="%")),
         ]
+        # Pruned 2026-09: DPK(HP) and Assist %(HP) sections removed — five
+        # near-duplicate boards made the weekly post skimmable by nobody.
+        # DPK survives in /seasonreport awards.
         has_content = False
         for title, value in sections:
             if value:
@@ -263,23 +263,19 @@ class Season(commands.Cog):
                         lines.append(f"{medal} **{name(pid)}** — {s['Impact']} ({s['games']}g, K/D {s['kd']})")
                     embed.add_field(name=label, value="\n".join(lines), inline=False)
 
-            # Awards
+            # Awards (pruned 2026-09: 11 -> 5. Kept: both Impact Kings, both
+            # K/D Leaders, The Grinder. Cut: OBJ Master, Damage Leader, ZCS/
+            # DPD kings (weekly post covers them), First Kill & ADR leaders.)
             awards = []
             if hp_q:
                 awards += filter(None, [
                     award_line(hp_q, "Impact", "💥 HP Impact King"),
                     award_line(hp_q, "kd", "⚔️ HP K/D Leader"),
-                    award_line(hp_q, "OBJ", "⏱️ OBJ Master", "s"),
-                    award_line(hp_q, "Total Damage", "🩸 Damage Leader"),
-                    award_line(hp_q, "ZCS", "🛡️ Zone Control King"),
-                    award_line(hp_q, "DPD", "💪 Damage per Death Leader"),
                 ])
             if snd_q:
                 awards += filter(None, [
                     award_line(snd_q, "Impact", "💥 SND Impact King"),
                     award_line(snd_q, "kd", "⚔️ SND K/D Leader"),
-                    award_line(snd_q, "First Kill", "⚡ First Kill Leader"),
-                    award_line(snd_q, "ADR", "🎯 ADR Leader"),
                 ])
             # Grinder: most total games across both modes
             all_pids = set(hp.keys()) | set(snd.keys())

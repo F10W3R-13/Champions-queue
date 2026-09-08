@@ -24,9 +24,7 @@
 > Enable "Direct Messages from server members" in your privacy settings or it can't reach you.
 
 > `/leaderboard` — Top 10 players by mode and metric.
-> Pick a mode (HP / SND) and a metric:
-> **Basic** — K/D, Impact, Games, OBJ/Time (HP), Damage (HP), ADR (SND), First Kills (SND)
-> **Advanced** — Damage per Death (HP), Damage per Kill (HP, lower = better), Zone Control Score (HP), Assist % (non-kill contribution)
+> Pick a mode (HP / SND) and a metric: K/D, Impact, Games Played, OBJ/Time (HP), ADR (SND).
 > Optionally pass `season:` (e.g. `S1`, or `career` for all-time). Defaults to the current season.
 
 **Match Results — automatic**
@@ -57,7 +55,7 @@ No command needed. If a name can't be matched, staff will review it — your sta
 
 > `/unlink` — Remove a wrong player link from a record (resets it to Unmatched).
 
-> `/reject` — Mark a record as Unmatched without linking anyone (e.g. unreadable / invalid entry).
+> `/reject` — Alias of `/unlink` (identical action: clears the player link, resets to Unmatched). Kept as a separate name for staff muscle memory; one shared code path.
 
 **Alerts**
 The bot posts to the staff log channel automatically when:

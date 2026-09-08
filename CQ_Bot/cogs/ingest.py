@@ -19,7 +19,7 @@ logger = logging.getLogger("CQ_Bot.ingest")
 #     to restore the old behaviour for active seasons);
 #   - when Airtable returns the monthly-limit error (429 billing), the loop
 #     backs off to once every 24h until the quota resets (1st of month UTC).
-RECONCILE_PERIOD_SECONDS = int(os.getenv('RECONCILE_PERIOD_SECONDS', '21600'))  # 6h
+RECONCILE_PERIOD_SECONDS = int(os.getenv('RECONCILE_PERIOD_SECONDS', '43200'))  # 12h
 QUOTA_BACKOFF_SECONDS = int(os.getenv('QUOTA_BACKOFF_SECONDS', '86400'))        # 24h
 _BILLING_LIMIT_MARKERS = ("PUBLIC_API_BILLING_LIMIT_EXCEEDED", "billing plan limit")
 
@@ -307,71 +307,57 @@ class Ingest(commands.Cog):
             logger.error("Error linking record %s: %s", record_id, e, exc_info=True)
             await interaction.followup.send(f"❌ Error linking record: {e}")
 
-    @app_commands.command(name="unlink", description="Unlink a player from a record (resets status to Unmatched).")
+    async def _clear_record_link(self, interaction: discord.Interaction, record_id: str, verb: str):
+        """Shared body for /unlink and /reject: clear a record's player link and
+        reset Status to Unmatched. Kept as one code path — the two commands
+        previously had identical bodies (pruning 2026-09)."""
+        record, table, mode = await _find_record(record_id)
+        if not record:
+            await interaction.followup.send(f"❌ Record ID `{record_id}` not found.")
+            return
+
+        raw_ign = record["fields"].get(core.RAW_IGN_FIELD)
+
+        await asyncio.to_thread(
+            table.update,
+            record_id,
+            {core.LINKED_PLAYER_FIELD: [], "Status": core.STATUS_UNMATCHED},
+            typecast=True
+        )
+
+        async with core.airtable_lock:
+            await asyncio.to_thread(core.matcher.reload)
+
+        await interaction.followup.send(f"✅ {verb.capitalize()} `{mode}` record `{record_id}` (`{raw_ign}`).")
+        await core.send_staff_log(
+            self.bot,
+            content=f"❌ Staff **{interaction.user.name}** {verb} `{mode}` record `{record_id}` (`{raw_ign}`)."
+        )
+
+    @app_commands.command(name="unlink", description="Remove a player link from a record (resets to Unmatched).")
     @app_commands.describe(record_id="The Airtable record ID to unlink")
     async def unlink_record(self, interaction: discord.Interaction, record_id: str):
         if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
-            
+
         await interaction.response.defer(ephemeral=False)
-        
         try:
-            record, table, mode = await _find_record(record_id)
-            if not record:
-                await interaction.followup.send(f"❌ Record ID `{record_id}` not found.")
-                return
-                
-            raw_ign = record["fields"].get(core.RAW_IGN_FIELD)
-            
-            await asyncio.to_thread(
-                table.update,
-                record_id,
-                {core.LINKED_PLAYER_FIELD: [], "Status": core.STATUS_UNMATCHED},
-                typecast=True
-            )
-            
-            async with core.airtable_lock:
-                await asyncio.to_thread(core.matcher.reload)
-                
-            await interaction.followup.send(f"✅ Unlinked player from `{mode}` record `{record_id}` (`{raw_ign}`).")
-            await core.send_staff_log(
-                self.bot,
-                content=f"🔓 Staff **{interaction.user.name}** unlinked `{mode}` record `{record_id}` (`{raw_ign}`)."
-            )
+            await self._clear_record_link(interaction, record_id, "unlinked")
         except Exception as e:
             logger.error("Error unlinking record %s: %s", record_id, e, exc_info=True)
             await interaction.followup.send(f"❌ Error: {e}")
 
-    @app_commands.command(name="reject", description="Mark a record as Unmatched (clears player link).")
+    @app_commands.command(name="reject", description="Reject a record: clear its player link (alias of /unlink).")
     @app_commands.describe(record_id="The Airtable record ID to reject")
     async def reject_record(self, interaction: discord.Interaction, record_id: str):
         if not core.is_staff(interaction):
             await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
             return
-            
+
         await interaction.response.defer(ephemeral=False)
-        
         try:
-            record, table, mode = await _find_record(record_id)
-            if not record:
-                await interaction.followup.send(f"❌ Record ID `{record_id}` not found.")
-                return
-                
-            raw_ign = record["fields"].get(core.RAW_IGN_FIELD)
-            
-            await asyncio.to_thread(
-                table.update,
-                record_id,
-                {core.LINKED_PLAYER_FIELD: [], "Status": core.STATUS_UNMATCHED},
-                typecast=True
-            )
-            
-            await interaction.followup.send(f"✅ Rejected `{mode}` record `{record_id}` (`{raw_ign}`) (marked Unmatched).")
-            await core.send_staff_log(
-                self.bot,
-                content=f"❌ Staff **{interaction.user.name}** rejected `{mode}` record `{record_id}` (`{raw_ign}`)."
-            )
+            await self._clear_record_link(interaction, record_id, "rejected")
         except Exception as e:
             logger.error("Error rejecting record %s: %s", record_id, e, exc_info=True)
             await interaction.followup.send(f"❌ Error: {e}")

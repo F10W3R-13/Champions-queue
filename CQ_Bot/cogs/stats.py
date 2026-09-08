@@ -123,18 +123,14 @@ class Stats(commands.Cog):
         app_commands.Choice(name="K/D Ratio", value="kd"),
         app_commands.Choice(name="Impact", value="impact"),
         app_commands.Choice(name="Games Played", value="games"),
-        # HP specific
+        # Mode-specific
         app_commands.Choice(name="OBJ / Time (HP)", value="hp_obj"),
-        app_commands.Choice(name="Damage (HP)", value="hp_damage"),
-        # SND specific
         app_commands.Choice(name="ADR (SND)", value="snd_adr"),
-        app_commands.Choice(name="First Kills (SND)", value="snd_fk"),
-        # Advanced metrics (computed from match records)
-        app_commands.Choice(name="Damage per Death (HP)", value="hp_dpd"),
-        app_commands.Choice(name="Damage per Kill - lower is better (HP)", value="hp_dpk"),
-        app_commands.Choice(name="Zone Control Score (HP)", value="hp_zcs"),
-        app_commands.Choice(name="Assist % (non-kill contribution)", value="assist_pct")
     ])
+    # Pruned 2026-09: Damage(HP), First Kills(SND), and the four advanced
+    # metrics (DPD/DPK/ZCS/Assist%) were removed from the interactive board —
+    # 11 choices buried the 5 that players actually compare. Advanced metrics
+    # live on in /seasonreport awards and the weekly post.
     @app_commands.describe(season="Season to rank (e.g. S1). Use 'career' for all-time. Defaults to the current season.")
     async def get_leaderboard(self, interaction: discord.Interaction, mode: app_commands.Choice[str],
                               metric: app_commands.Choice[str], season: str = None):
@@ -159,33 +155,18 @@ class Stats(commands.Cog):
             "impact": (f"{mode_val} Avg Impact", "Avg Impact", True),
             "games": (f"{mode_val} Games", "Games", False),
             "hp_obj": ("HP Avg OBJ", "Avg OBJ (s)", True),
-            "hp_damage": ("HP Avg Total Damage", "Avg Damage", True),
             "snd_adr": ("SND Avg ADR", "Avg ADR", True),
-            "snd_fk": ("SND Avg First Kill", "Avg First Kills", True)
         }
-        
-        ADVANCED_METRICS = {"hp_dpd", "hp_dpk", "hp_zcs", "assist_pct"}
-        is_advanced = metric_val in ADVANCED_METRICS
-        # Advanced metrics are precomputed by Airtable formula fields on the Players table.
-        # Read them directly unless a specific past season was explicitly requested.
-        if is_advanced and season is None:
-            is_career = True
 
-        mapping.update({
-            "hp_dpd": ("HP DPD", "Dmg per Death", False),
-            "hp_dpk": ("HP DPK", "Dmg per Kill", False),
-            "hp_zcs": ("HP ZCS", "Zone Control Score", False),
-            "assist_pct": (f"{mode_val} Assist %", "Assist %", False),
-        })
+        # Pruned 2026-09 alongside the choice list (see above). The mapping
+        # entries for hp_damage/snd_fk/advanced metrics were removed together.
         field_name, metric_label, is_rollup = mapping[metric_val]
         games_field = f"{mode_val} Games"
 
         # Map metric choice to season-aggregation keys (core.season_player_stats output)
         season_key_map = {
             "kd": "kd", "impact": "Impact", "games": "games",
-            "hp_obj": "OBJ", "hp_damage": "Total Damage",
-            "snd_adr": "ADR", "snd_fk": "First Kill",
-            "hp_dpd": "DPD", "hp_dpk": "DPK", "hp_zcs": "ZCS", "assist_pct": "AssistPct",
+            "hp_obj": "OBJ", "snd_adr": "ADR",
         }
 
         try:
@@ -233,12 +214,8 @@ class Stats(commands.Cog):
                         "score": float(s.get(season_key, 0) or 0)
                     })
             
-            # Sort: Damage per Kill is ascending (lower = more efficient), everything else descending
-            if metric_val == "hp_dpk":
-                leaderboard_data = [e for e in leaderboard_data if e["score"] > 0]
-                leaderboard_data.sort(key=lambda x: x["score"])
-            else:
-                leaderboard_data.sort(key=lambda x: x["score"], reverse=True)
+            # Sort descending (the only ascending metric, DPK, was pruned 2026-09)
+            leaderboard_data.sort(key=lambda x: x["score"], reverse=True)
             top_10 = leaderboard_data[:10]
             
             scope_label = "Career (All-Time)" if (is_career or scope == "__ALL__") else scope

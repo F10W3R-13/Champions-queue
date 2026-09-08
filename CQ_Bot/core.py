@@ -158,11 +158,14 @@ QUEUE_STATE_FILE = os.getenv('QUEUE_STATE_FILE', 'queue_state.json')
 QUEUE_REMINDER_ENABLED = os.getenv('QUEUE_REMINDER_ENABLED', '1') == '1'
 
 # --- Airtable Table IDs ---
-PLAYERS_TABLE_ID = 'tbl2sN1bXNlpcUBhV'
-HP_TABLE_ID = 'tblDp5p1XTzdeFmWm'
-SND_TABLE_ID = 'tblZePZqGRJS5tLbG'
-ALIASES_TABLE_ID = 'tblHd3q0MNm1186hH'
-TEAMS_TABLE_ID = 'tblnTq4qEFuMzZt7i'
+PLAYERS_TABLE_ID = os.getenv('PLAYERS_TABLE_ID', 'tbl2sN1bXNlpcUBhV')
+HP_TABLE_ID = os.getenv('HP_TABLE_ID', 'tblDp5p1XTzdeFmWm')
+SND_TABLE_ID = os.getenv('SND_TABLE_ID', 'tblZePZqGRJS5tLbG')
+ALIASES_TABLE_ID = os.getenv('ALIASES_TABLE_ID', 'tblHd3q0MNm1186hH')
+TEAMS_TABLE_ID = os.getenv('TEAMS_TABLE_ID', 'tblnTq4qEFuMzZt7i')
+# Table IDs are env-overridable so a duplicated/migrated base (e.g. a fresh
+# workspace for a clean monthly API quota, or an S2 base) can be adopted with
+# .env edits only — no code change, no redeploy.
 
 # --- Airtable Field Names ---
 RAW_IGN_FIELD = 'IGN as read'

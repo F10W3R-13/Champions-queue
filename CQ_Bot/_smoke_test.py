@@ -560,6 +560,9 @@ assert _decay_calls == [(_did, -5)], ("floor should clamp to -5", _decay_calls)
 print("Decay floor protection regression OK:", _decay_calls)
 
 # ---- Test F: gate applies ONLY to Champs holders ----
+# Force the gate ON for these tests — .env may carry DECAY_GATE_ENABLED=0
+# (relaunch policy); F/F2 verify gate LOGIC, not the policy switch.
+_core2.DECAY_GATE_ENABLED = True
 # Player at 790 (< 800 threshold) but NOT a Champs holder -> must not be gated.
 def _below_mmr(discord_id):
     return (790.0, (_now - _dt2.timedelta(days=2)).timestamp(), 10)
