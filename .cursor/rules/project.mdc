@@ -1,0 +1,6 @@
+---
+description: Champion's Queue 프로젝트 공통 규칙 (진실 원천 포인터)
+alwaysApply: true
+---
+
+프로젝트의 단일 진실 원천은 `CQ_Bot/CLAUDE.md`. 작업 전 반드시 읽고, 문서 충돌 시 그 파일이 우선한다. 주요 변경 후에는 CLAUDE.md §10 규칙대로 해당 섹션을 갱신한다. 검증은 CQ_Bot/ 에서 `python -m py_compile cogs/*.py core.py main.py` → `python _smoke_test.py`.
