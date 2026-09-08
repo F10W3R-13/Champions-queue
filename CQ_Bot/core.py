@@ -60,6 +60,9 @@ MMR_MODIFIER_MAX = float(os.getenv('MMR_MODIFIER_MAX', '10'))    # +/- max perfo
 MMR_IMPACT_MIN = float(os.getenv('MMR_IMPACT_MIN', '60'))
 MMR_IMPACT_MAX = float(os.getenv('MMR_IMPACT_MAX', '200'))
 MMR_MODIFIER_DRYRUN = os.getenv('MMR_MODIFIER_DRYRUN', '1') == '1'  # 1 = report only, don't apply
+# On-disk persistence for the modifier loop's processed/backfilled/applied sets
+# (queue/decay state files are configurable the same way).
+MMR_STATE_FILE = os.getenv('MMR_STATE_FILE', 'mmr_state.json')
 
 # --- Inactivity decay & 800-point queue eligibility gate (cogs/decay.py) ---
 # Decay is TIERED by whether the player holds the Champs role (tournament-team
@@ -560,7 +563,7 @@ def player_directory_cached():
 def player_directory():
     """{player_id: (Primary IGN, Discord Handle)}. (sync - call via to_thread)"""
     d = {}
-    for p in players_table.all():
+    for p in players_table.all(fields=["Primary IGN", "Discord Handle"]):
         f = p["fields"]
         d[p["id"]] = (f.get("Primary IGN", "Unknown"), f.get("Discord Handle", ""))
     return d

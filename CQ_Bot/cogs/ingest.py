@@ -8,6 +8,18 @@ import core
 
 logger = logging.getLogger("CQ_Bot.ingest")
 
+
+async def _find_record(record_id):
+    """Fetch a record from HP, then SND. Returns (record, table, mode) or (None, None, "")."""
+    for table, mode in ((core.hp_table, "HP"), (core.snd_table, "SND")):
+        try:
+            record = await asyncio.to_thread(table.get, record_id)
+            return record, table, mode
+        except Exception:
+            continue
+    return None, None, ""
+
+
 class Ingest(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -184,16 +196,12 @@ class Ingest(commands.Cog):
             if member:
                 # Find by discord ID
                 discord_id = str(member.id)
-                records = await asyncio.to_thread(
-                    core.players_table.all,
-                    formula=f"{{Discord ID}} = '{discord_id}'",
-                    max_records=1
-                )
-                if not records:
+                rec = await asyncio.to_thread(core.player_record_by_discord, discord_id)
+                if not rec:
                     await interaction.followup.send(f"❌ Discord member **{member.display_name}** is not registered. They must run `/ign` first.")
                     return
-                player_record_id = records[0]["id"]
-                player_name = records[0]["fields"].get("Primary IGN", member.display_name)
+                player_record_id = rec["id"]
+                player_name = rec["fields"].get("Primary IGN", member.display_name)
             else:
                 # Find by IGN
                 n = core.normalize(ign)
@@ -214,22 +222,7 @@ class Ingest(commands.Cog):
                     player_name = ign
             
             # Find the record in HP or SND
-            record = None
-            table = None
-            mode = ""
-            
-            try:
-                record = await asyncio.to_thread(core.hp_table.get, record_id)
-                table = core.hp_table
-                mode = "HP"
-            except Exception:
-                try:
-                    record = await asyncio.to_thread(core.snd_table.get, record_id)
-                    table = core.snd_table
-                    mode = "SND"
-                except Exception:
-                    pass
-                    
+            record, table, mode = await _find_record(record_id)
             if not record:
                 await interaction.followup.send(f"❌ Record ID `{record_id}` not found in HP or SND tables.")
                 return
@@ -293,22 +286,7 @@ class Ingest(commands.Cog):
         await interaction.response.defer(ephemeral=False)
         
         try:
-            record = None
-            table = None
-            mode = ""
-            
-            try:
-                record = await asyncio.to_thread(core.hp_table.get, record_id)
-                table = core.hp_table
-                mode = "HP"
-            except Exception:
-                try:
-                    record = await asyncio.to_thread(core.snd_table.get, record_id)
-                    table = core.snd_table
-                    mode = "SND"
-                except Exception:
-                    pass
-                    
+            record, table, mode = await _find_record(record_id)
             if not record:
                 await interaction.followup.send(f"❌ Record ID `{record_id}` not found.")
                 return
@@ -344,22 +322,7 @@ class Ingest(commands.Cog):
         await interaction.response.defer(ephemeral=False)
         
         try:
-            record = None
-            table = None
-            mode = ""
-            
-            try:
-                record = await asyncio.to_thread(core.hp_table.get, record_id)
-                table = core.hp_table
-                mode = "HP"
-            except Exception:
-                try:
-                    record = await asyncio.to_thread(core.snd_table.get, record_id)
-                    table = core.snd_table
-                    mode = "SND"
-                except Exception:
-                    pass
-                    
+            record, table, mode = await _find_record(record_id)
             if not record:
                 await interaction.followup.send(f"❌ Record ID `{record_id}` not found.")
                 return

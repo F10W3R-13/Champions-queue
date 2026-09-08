@@ -70,6 +70,15 @@ A.rows.append({"id":"a2","fields":{"IGN":"Phoenix","Player":["recP"]}})
 
 import main
 
+# One explicit event loop for the whole script - asyncio.get_event_loop() with
+# no running loop is deprecated (Python 3.12+) and warns on 3.13.
+_LOOP = asyncio.new_event_loop()
+asyncio.set_event_loop(_LOOP)
+
+
+def _run(coro):
+    return _LOOP.run_until_complete(coro)
+
 print("roster:", main.matcher.roster)
 
 # ---- matcher tests ----
@@ -259,7 +268,7 @@ async def _no_mirror(self, m, lines): return None
 _mmr.MMRModifier._mirror_to_public = _no_mirror
 
 # Pass 1: should apply +5 once.
-res1 = asyncio.get_event_loop().run_until_complete(
+res1 = _run(
     cog.apply_modifiers_for_match(match, mtime, changes))
 assert _add_calls == [(did, 5)], _add_calls
 assert _mmr._applied_key(did, "g1") in cog.applied, "applied set should record the combo after pass 1"
@@ -268,7 +277,7 @@ print("MMR pass 1 applied once:", _add_calls)
 # Pass 2: simulate a re-process (processed wasn't set due to a crash). The
 # applied-set guard must prevent a second nq_add_mmr call.
 _add_calls.clear()
-res2 = asyncio.get_event_loop().run_until_complete(
+res2 = _run(
     cog.apply_modifiers_for_match(match, mtime, changes))
 assert _add_calls == [], ("REGRESSION: re-process re-applied modifier! calls=", _add_calls)
 print("MMR pass 2 (re-process) did NOT double-apply:", _add_calls)
@@ -472,7 +481,7 @@ dcog_dead.below_threshold = set()
 dcog_dead.dead_days = 3
 _core2.nq_recent_match_count = lambda hours=24: 0   # dead day
 _decay_calls.clear()
-asyncio.get_event_loop().run_until_complete(dcog_dead.run_sweep())
+_run(dcog_dead.run_sweep())
 assert _decay_calls == [], ("dead day must not decay anyone", _decay_calls)
 assert dcog_dead.dead_days == 4, ("dead_days should increment", dcog_dead.dead_days)
 # Effective grace extension: with 4 dead_days, a Champs player idle 8d has effective
@@ -489,7 +498,7 @@ dcog_alive.decay_applied = set()
 dcog_alive.below_threshold = set()
 dcog_alive.dead_days = 4
 _decay_calls.clear()
-asyncio.get_event_loop().run_until_complete(dcog_alive.run_sweep())
+_run(dcog_alive.run_sweep())
 assert dcog_alive.dead_days == 0, ("alive day should reset dead_days", dcog_alive.dead_days)
 assert _decay_calls == [(_did, -10)], ("Champs 8d idle should decay -10", _decay_calls)
 print("Dead-day reset test E2 OK: dead_days reset to 0, Champs decayed")
@@ -501,13 +510,13 @@ dcog.decay_applied = set()
 dcog.below_threshold = set()
 dcog.dead_days = 0
 _decay_calls.clear()
-n1 = asyncio.get_event_loop().run_until_complete(dcog.run_sweep())
+n1 = _run(dcog.run_sweep())
 assert _decay_calls == [(_did, -10)], _decay_calls
 _date_key = _decay._decay_key(_now.strftime("%Y-%m-%d"), _did)
 assert _date_key in dcog.decay_applied, "decay_applied should record day|player"
 # Pass 2 same day -> guard prevents second call.
 _decay_calls.clear()
-asyncio.get_event_loop().run_until_complete(dcog.run_sweep())
+_run(dcog.run_sweep())
 assert _decay_calls == [], ("REGRESSION: same-day re-run re-decayed", _decay_calls)
 print("Decay double-apply regression OK")
 
@@ -519,13 +528,13 @@ dcog2.decay_applied = set()
 dcog2.below_threshold = set()
 dcog2.dead_days = 0
 _decay_calls.clear()
-asyncio.get_event_loop().run_until_complete(dcog2.run_sweep())
+_run(dcog2.run_sweep())
 assert _decay_calls == [], "dry-run must not call nq_add_mmr"
 assert _date_key not in dcog2.decay_applied, "REGRESSION: dry-run stamped decay_applied"
 # Dry-run on a dead day must NOT increment dead_days.
 dcog2.dead_days = 2
 _core2.nq_recent_match_count = lambda hours=24: 0
-asyncio.get_event_loop().run_until_complete(dcog2.run_sweep())
+_run(dcog2.run_sweep())
 assert dcog2.dead_days == 2, ("dry-run must not increment dead_days", dcog2.dead_days)
 print("Decay dry-run does not stamp state regression OK")
 _core2.DECAY_DRYRUN = False
@@ -541,7 +550,7 @@ dcog3.decay_applied = set()
 dcog3.below_threshold = set()
 dcog3.dead_days = 0
 _decay_calls.clear()
-asyncio.get_event_loop().run_until_complete(dcog3.run_sweep())
+_run(dcog3.run_sweep())
 assert _decay_calls == [(_did, -5)], ("floor should clamp to -5", _decay_calls)
 print("Decay floor protection regression OK:", _decay_calls)
 
@@ -555,7 +564,7 @@ dcogF.bot = _FakeGuildBot(has_champs=False)   # non-Champs
 dcogF.decay_applied = set()
 dcogF.below_threshold = set()
 dcogF.dead_days = 0
-asyncio.get_event_loop().run_until_complete(dcogF.run_sweep())
+_run(dcogF.run_sweep())
 assert _did not in dcogF.below_threshold, ("non-Champs must not be gated", dcogF.below_threshold)
 print("Gate Champs-only test F OK: non-Champs at 790 not gated")
 # Same player as a Champs holder -> IS gated.
@@ -564,7 +573,7 @@ dcogF2.bot = _FakeGuildBot(has_champs=True)
 dcogF2.decay_applied = set()
 dcogF2.below_threshold = set()
 dcogF2.dead_days = 0
-asyncio.get_event_loop().run_until_complete(dcogF2.run_sweep())
+_run(dcogF2.run_sweep())
 assert _did in dcogF2.below_threshold, ("Champs below threshold must be gated", dcogF2.below_threshold)
 print("Gate Champs-only test F2 OK: Champs at 790 gated")
 

@@ -62,7 +62,10 @@ class Season(commands.Cog):
     async def build_weekly_embed(self):
         """Top 10 rankings. Values are precomputed by Airtable formula fields
         on the Players table - this is a single table read, no bot-side math."""
-        players = await asyncio.to_thread(core.players_table.all)
+        players = await asyncio.to_thread(
+            core.players_table.all,
+            fields=["Primary IGN", "HP Games", "SND Games",
+                    "HP ZCS", "HP DPD", "HP DPK", "HP Assist %", "SND Assist %"])
 
         def collect(games_field, value_field):
             rows = []
@@ -185,13 +188,9 @@ class Season(commands.Cog):
 
             # Caller's placement progress
             discord_id = str(interaction.user.id)
-            records = await asyncio.to_thread(
-                core.players_table.all,
-                formula=f"{{Discord ID}} = '{discord_id}'",
-                max_records=1
-            )
+            records = await asyncio.to_thread(core.player_record_by_discord, discord_id)
             if records:
-                pid = records[0]["id"]
+                pid = records["id"]
                 hp = await asyncio.to_thread(core.season_player_stats_cached, "HP")
                 snd = await asyncio.to_thread(core.season_player_stats_cached, "SND")
                 hp_games = hp.get(pid, {}).get("games", 0)

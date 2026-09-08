@@ -20,7 +20,7 @@ import core
 
 logger = logging.getLogger("CQ_Bot.mmr")
 
-STATE_FILE = "mmr_state.json"
+STATE_FILE = core.MMR_STATE_FILE  # configurable via .env (matches queue/decay state files)
 DISCORD_EPOCH_MS = 1420070400000
 MATCH_WINDOW_HOURS = 4      # screenshots for a match must be posted within this window
 # Look BACK this far from mtime when scanning for impact records. NeatQueue's

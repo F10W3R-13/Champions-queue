@@ -38,11 +38,7 @@ class Registration(commands.Cog):
         if not any(r.name == core.VERIFIED_ROLE_NAME for r in added):
             return
         try:
-            existing = await asyncio.to_thread(
-                core.players_table.all,
-                formula=f"{{Discord ID}} = '{after.id}'",
-                max_records=1
-            )
+            existing = await asyncio.to_thread(core.player_record_by_discord, str(after.id))
             if existing:
                 return  # already registered - nothing to do
             ign_chan = (self.bot.get_channel(core.IGN_HELP_CHANNEL_ID)
@@ -101,12 +97,7 @@ class Registration(commands.Cog):
                 )
                 return
 
-            existing = await asyncio.to_thread(
-                core.players_table.all, 
-                formula=f"{{Discord ID}} = '{discord_id}'", 
-                max_records=1
-            )
-            existing_rec = existing[0] if existing else None
+            existing_rec = await asyncio.to_thread(core.player_record_by_discord, discord_id)
             if existing_rec and existing_rec['fields'].get('Primary IGN'):
                 # Genuinely already registered: self-heal the queue-access role and stop.
                 await self._grant_registered_role(interaction)
@@ -174,16 +165,10 @@ class Registration(commands.Cog):
         await interaction.response.defer(ephemeral=False)
         
         try:
-            records = await asyncio.to_thread(
-                core.players_table.all,
-                formula=f"{{Discord ID}} = '{discord_id}'",
-                max_records=1
-            )
-            if not records:
+            player = await asyncio.to_thread(core.player_record_by_discord, discord_id)
+            if not player:
                 await interaction.followup.send("You are not registered yet. Register first with `/ign [Your_IGN]`.")
                 return
-                
-            player = records[0]
             player_record_id = player["id"]
             current_ign = player["fields"].get("Primary IGN")
             
@@ -239,7 +224,7 @@ class Registration(commands.Cog):
                 await interaction.followup.send("❌ Registered role not found in this server. Check the role ID.")
                 return
 
-            players = await asyncio.to_thread(core.players_table.all)
+            players = await asyncio.to_thread(core.players_table.all, fields=["Discord ID"])
             registered_ids = {p["fields"].get("Discord ID") for p in players if p["fields"].get("Discord ID")}
 
             added, already = 0, 0

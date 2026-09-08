@@ -22,18 +22,14 @@ class Stats(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            records = await asyncio.to_thread(
-                core.players_table.all,
-                formula=f"{{Discord ID}} = '{discord_id}'",
-                max_records=1
-            )
-            if not records:
+            rec = await asyncio.to_thread(core.player_record_by_discord, discord_id)
+            if not rec:
                 await interaction.followup.send(
                     "❌ You are not registered yet. Register your IGN with `/ign [Your_IGN]` first.",
                     ephemeral=True)
                 return
 
-            fields = records[0]['fields']
+            fields = rec['fields']
             discord_handle = fields.get('Discord Handle', target_user.name)
             primary_ign = fields.get('Primary IGN', 'Unknown')
             

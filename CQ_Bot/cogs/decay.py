@@ -178,6 +178,10 @@ class Decay(commands.Cog):
         did_map = await asyncio.to_thread(core.discord_id_map)
         champs_role = guild.get_role(core.CHAMPS_ROLE_ID) if core.CHAMPS_ROLE_ID else None
 
+        # Per-player NQ info fetched once here and shared with the gate step
+        # below (Champs members were previously fetched twice: decay + gate).
+        mmr_info = {}
+
         decay_lines = []
         decay_count = 0
         skipped_exempt = 0
@@ -194,6 +198,7 @@ class Decay(commands.Cog):
             if info is None:
                 skipped_notinq += 1
                 continue
+            mmr_info[did] = info
             mmr, last_match_unix, total_games = info
 
             if total_games < core.PLACEMENT_GAMES:
@@ -230,6 +235,9 @@ class Decay(commands.Cog):
                 continue
             try:
                 await asyncio.to_thread(core.nq_add_mmr, did, -amount)
+                # Keep the shared info cache post-decay so the gate step sees
+                # the new value without a second API call.
+                mmr_info[did] = (mmr - amount, last_match_unix, total_games)
                 self.decay_applied.add(key)
                 decay_count += 1
                 decay_lines.append(
@@ -244,7 +252,7 @@ class Decay(commands.Cog):
                     logger.error("nq_add_mmr (decay) failed for %s: %s", did, e)
 
         # ---- eligibility gate step (Champs holders only) ----
-        gate_actions = await self._reconcile_gate(did_map, guild, champs_role)
+        gate_actions = await self._reconcile_gate(did_map, guild, champs_role, mmr_info)
 
         if decay_lines or decay_count or gate_actions or not core.DECAY_DRYRUN:
             save_state(self.decay_applied, self.below_threshold, self.dead_days)
@@ -253,9 +261,12 @@ class Decay(commands.Cog):
                                  skipped_notinq, errors, gate_actions, now)
         return decay_count
 
-    async def _reconcile_gate(self, did_map, guild, champs_role):
+    async def _reconcile_gate(self, did_map, guild, champs_role, prefetched=None):
         """Recompute which CHAMPS HOLDERS should be below threshold and toggle
-        roles for the diff. Non-Champs are never gated."""
+        roles for the diff. Non-Champs are never gated.
+
+        `prefetched` maps discord_id -> nq_get_mmr info from the decay loop;
+        ids absent from it fall back to a live fetch."""
         if not core.REGISTERED_ROLE_ID:
             return []
         role = guild.get_role(core.REGISTERED_ROLE_ID)
@@ -268,10 +279,13 @@ class Decay(commands.Cog):
         for did in did_map:
             if not _member_has_champs(guild, champs_role, did):
                 continue
-            try:
-                info = await asyncio.to_thread(core.nq_get_mmr, did)
-            except Exception:
-                continue
+            if prefetched is not None and did in prefetched:
+                info = prefetched[did]
+            else:
+                try:
+                    info = await asyncio.to_thread(core.nq_get_mmr, did)
+                except Exception:
+                    continue
             if info is None:
                 continue
             mmr, _last, total_games = info
