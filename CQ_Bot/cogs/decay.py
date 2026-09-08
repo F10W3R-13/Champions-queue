@@ -39,7 +39,7 @@ from discord import app_commands
 import logging
 import asyncio
 import json
-from datetime import datetime, timezone, timedelta, time as dtime
+from datetime import datetime, timezone, timedelta, date, time as dtime
 
 import core
 
@@ -60,21 +60,77 @@ def load_state():
         return set(), set(), 0
 
 
-def save_state(decay_applied, below_threshold, dead_days):
+def save_state(decay_applied, below_threshold, dead_days, extra=None):
+    """Persist state. Unknown-but-managed keys (decay_epoch) present on disk
+    are preserved automatically so legacy-shape call sites never drop them."""
     try:
+        payload = {
+            "decay_applied": list(decay_applied)[-2000:],
+            "below_threshold": list(below_threshold),
+            "dead_days": int(dead_days),
+        }
+        if not (extra and "decay_epoch" in extra):
+            prev = _load_state_raw().get("decay_epoch")
+            if prev:
+                payload["decay_epoch"] = prev
+        if extra:
+            payload.update(extra)
         with open(core.DECAY_STATE_FILE, "w") as f:
-            json.dump({
-                "decay_applied": list(decay_applied)[-2000:],
-                "below_threshold": list(below_threshold),
-                "dead_days": int(dead_days),
-            }, f)
+            json.dump(payload, f)
     except Exception as e:
         logger.error("Could not save decay state: %s", e)
+
+
+def _load_state_raw():
+    """Full state dict as-is (no shaping). Missing file -> {}."""
+    try:
+        with open(core.DECAY_STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def _decay_key(date_str, discord_id):
     """Per-(day, player) idempotency key for the decay_applied set."""
     return f"{date_str}|{discord_id}"
+
+
+def _resolve_epoch(state_data):
+    """Effective relaunch epoch: explicit env pin wins; else the one persisted
+    in state (pinned on first sweep); else today (fresh deploy -> full amnesty).
+
+    Returns (epoch_date_or_None, pinned_now_bool). Read-only helper used by
+    both the sweep and /decaystatus."""
+    if core.DECAY_EPOCH:
+        try:
+            return date.fromisoformat(core.DECAY_EPOCH), False
+        except ValueError:
+            pass
+    raw = state_data.get("decay_epoch") if isinstance(state_data, dict) else None
+    if raw:
+        try:
+            return date.fromisoformat(raw), False
+        except ValueError:
+            pass
+    return date.today(), True
+
+
+def _idle_days_since(now, last_match_unix, *, effective_grace,
+                     epoch=None):
+    """Idle days measured from the LATEST of (last match, relaunch epoch).
+
+    The epoch clamp implements the relaunch amnesty: after a long community
+    pause, idle time accrued BEFORE the relaunch must not trigger escalated
+    decay the day after the first match back."""
+    candidates = []
+    if last_match_unix and last_match_unix > 0:
+        candidates.append(datetime.fromtimestamp(last_match_unix, tz=timezone.utc))
+    if epoch is not None:
+        candidates.append(datetime.combine(epoch, dtime(0, 0), tzinfo=timezone.utc))
+    if not candidates:
+        return effective_grace + 1
+    base = max(candidates)
+    return int((now - base).total_seconds() // 86400)
 
 
 def compute_daily_decay(idle_days, mmr, *, grace, rate, escalate_after, escalate_rate):
@@ -163,6 +219,16 @@ class Decay(commands.Cog):
         now = datetime.now(timezone.utc)
         date_str = now.strftime("%Y-%m-%d")
 
+        # ---- relaunch epoch (amnesty anchor) ----
+        # Idle days are measured from max(last_match, epoch) so pre-relaunch
+        # absence never triggers escalated decay right after the first match.
+        raw = _load_state_raw()
+        epoch, epoch_just_pinned = _resolve_epoch(raw)
+        if epoch_just_pinned and not core.DECAY_DRYRUN:
+            save_state(self.decay_applied, self.below_threshold, self.dead_days,
+                       extra={"decay_epoch": epoch.isoformat()})
+            logger.info("Relaunch epoch pinned to %s (decay amnesty anchor).", epoch)
+
         # ---- dead-day detection (structural-impossibility fairness) ----
         recent = await asyncio.to_thread(core.nq_recent_match_count, 24)
         if recent == 0:
@@ -209,13 +275,14 @@ class Decay(commands.Cog):
             is_champs = _member_has_champs(guild, champs_role, did)
             base_grace, rate, escalate_after, escalate_rate = _tier_for(is_champs)
             effective_grace = base_grace + self.dead_days
+            # Dead days extend the ESCALATION threshold too, mirroring grace —
+            # previously only grace was extended, so a long pause could push
+            # players past escalate_after while still "within grace" on paper.
+            effective_escalate_after = escalate_after + self.dead_days
 
             # ---- decay step ----
-            if last_match_unix > 0:
-                last_dt = datetime.fromtimestamp(last_match_unix, tz=timezone.utc)
-                idle_days = int((now - last_dt).total_seconds() // 86400)
-            else:
-                idle_days = effective_grace + 1
+            idle_days = _idle_days_since(
+                now, last_match_unix, effective_grace=effective_grace, epoch=epoch)
 
             key = _decay_key(date_str, did)
             if key in self.decay_applied:
@@ -224,7 +291,7 @@ class Decay(commands.Cog):
             amount = compute_daily_decay(
                 idle_days, mmr,
                 grace=effective_grace, rate=rate,
-                escalate_after=escalate_after, escalate_rate=escalate_rate)
+                escalate_after=effective_escalate_after, escalate_rate=escalate_rate)
             if amount <= 0:
                 continue
 
@@ -258,7 +325,7 @@ class Decay(commands.Cog):
             save_state(self.decay_applied, self.below_threshold, self.dead_days)
 
         await self._report_sweep(decay_lines, decay_count, skipped_exempt,
-                                 skipped_notinq, errors, gate_actions, now)
+                                 skipped_notinq, errors, gate_actions, now, epoch)
         return decay_count
 
     async def _reconcile_gate(self, did_map, guild, champs_role, prefetched=None):
@@ -269,6 +336,8 @@ class Decay(commands.Cog):
         ids absent from it fall back to a live fetch."""
         if not core.REGISTERED_ROLE_ID:
             return []
+        if not core.DECAY_GATE_ENABLED:
+            return []  # gate suspended (relaunch policy; see DECAY_GATE_ENABLED)
         role = guild.get_role(core.REGISTERED_ROLE_ID)
         if role is None:
             logger.warning("Registered role %d not found.", core.REGISTERED_ROLE_ID)
@@ -378,7 +447,7 @@ class Decay(commands.Cog):
         await core.send_staff_log(self.bot, embed=embed)
 
     async def _report_sweep(self, decay_lines, decay_count, skipped_exempt,
-                            skipped_notinq, errors, gate_actions, now):
+                            skipped_notinq, errors, gate_actions, now, epoch=None):
         """Staff-log summary of the sweep."""
         mode = "DRY-RUN" if core.DECAY_DRYRUN else "LIVE"
         summary = (f"Decay: **{decay_count}** applied - {skipped_exempt} exempt - "
@@ -396,11 +465,12 @@ class Decay(commands.Cog):
             embed.add_field(name="Result", value="Nothing to do - no idle players and no gate changes.", inline=False)
         embed.set_footer(
             text=(f"Champs: grace {core.DECAY_GRACE_DAYS}+{self.dead_days}d - "
-                  f"rate {core.DECAY_RATE}->{core.DECAY_ESCALATE_RATE} @ {core.DECAY_ESCALATE_AFTER_DAYS}d | "
+                  f"rate {core.DECAY_RATE}->{core.DECAY_ESCALATE_RATE} @ {core.DECAY_ESCALATE_AFTER_DAYS}+{self.dead_days}d | "
                   f"non-Champs: grace {core.DECAY_GRACE_DAYS_NONCHAMPS}+{self.dead_days}d - "
                   f"rate {core.DECAY_RATE_NONCHAMPS}->{core.DECAY_ESCALATE_RATE_NONCHAMPS} "
-                  f"@ {core.DECAY_ESCALATE_AFTER_DAYS_NONCHAMPS}d | "
-                  f"floor {core.DECAY_FLOOR} - threshold {core.DECAY_THRESHOLD} (Champs only)"))
+                  f"@ {core.DECAY_ESCALATE_AFTER_DAYS_NONCHAMPS}+{self.dead_days}d | "
+                  f"floor {core.DECAY_FLOOR} - threshold {core.DECAY_THRESHOLD} (Champs only) - "
+                  f"epoch {epoch.isoformat() if epoch else 'n/a'}"))
         await core.send_staff_log(self.bot, embed=embed)
 
     # ---------- near-realtime hook (called from cogs/mmr.py) ----------
@@ -411,6 +481,8 @@ class Decay(commands.Cog):
         try:
             if not core.REGISTERED_ROLE_ID or not core.GUILD_ID:
                 return
+            if not core.DECAY_GATE_ENABLED:
+                return  # gate suspended (relaunch policy)
             guild = self.bot.get_guild(int(core.GUILD_ID))
             if guild is None:
                 return
@@ -463,12 +535,14 @@ class Decay(commands.Cog):
                 return
             mmr, last_match_unix, total_games = info
             now = datetime.now(timezone.utc)
+            epoch, _ = _resolve_epoch(_load_state_raw())
+            idle_days = _idle_days_since(
+                now, last_match_unix, effective_grace=core.DECAY_GRACE_DAYS + self.dead_days,
+                epoch=epoch)
             if last_match_unix > 0:
                 last_dt = datetime.fromtimestamp(last_match_unix, tz=timezone.utc)
-                idle_days = int((now - last_dt).total_seconds() // 86400)
                 idle_str = f"{idle_days} day(s) (last match {last_dt.strftime('%Y-%m-%d')})"
             else:
-                idle_days = core.DECAY_GRACE_DAYS + self.dead_days + 1
                 idle_str = "no match on record"
 
             champs_role = (interaction.guild.get_role(core.CHAMPS_ROLE_ID)
@@ -503,7 +577,7 @@ class Decay(commands.Cog):
             if not is_champs:
                 access += " (non-Champs: not gated)"
             embed.add_field(name="Queue access", value=access, inline=True)
-            embed.set_footer(text=f"Threshold {core.DECAY_THRESHOLD} (Champs only) - floor {core.DECAY_FLOOR} - dead_days {self.dead_days}")
+            embed.set_footer(text=f"Threshold {core.DECAY_THRESHOLD} (Champs only) - floor {core.DECAY_FLOOR} - dead_days {self.dead_days} - epoch {epoch.isoformat() if epoch else 'n/a'}")
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
             logger.error("decaystatus error: %s", e, exc_info=True)

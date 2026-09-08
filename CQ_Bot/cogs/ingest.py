@@ -3,10 +3,30 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import logging
 import asyncio
+import os
+import time
 
 import core
 
 logger = logging.getLogger("CQ_Bot.ingest")
+
+# --- Airtable monthly-quota guard ---------------------------------------
+# Airtable Free/Team plans have a HARD monthly API call budget (1K / 100K).
+# The old 45s reconcile polling burned ~5,000 calls/day (~150K/month) and
+# exhausted the workspace quota while the community was idle. Reconcile is a
+# SAFETY NET (normal path matches inline at ingest), so:
+#   - default period is now 6h (env-tunable, e.g. RECONCILE_PERIOD_SECONDS=45
+#     to restore the old behaviour for active seasons);
+#   - when Airtable returns the monthly-limit error (429 billing), the loop
+#     backs off to once every 24h until the quota resets (1st of month UTC).
+RECONCILE_PERIOD_SECONDS = int(os.getenv('RECONCILE_PERIOD_SECONDS', '21600'))  # 6h
+QUOTA_BACKOFF_SECONDS = int(os.getenv('QUOTA_BACKOFF_SECONDS', '86400'))        # 24h
+_BILLING_LIMIT_MARKERS = ("PUBLIC_API_BILLING_LIMIT_EXCEEDED", "billing plan limit")
+
+
+def _looks_like_billing_limit(exc: Exception) -> bool:
+    """True if an Airtable exception smells like the monthly quota error."""
+    return any(m in str(exc) for m in _BILLING_LIMIT_MARKERS)
 
 
 async def _find_record(record_id):
@@ -23,6 +43,7 @@ async def _find_record(record_id):
 class Ingest(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self._quota_backoff_until = 0.0  # monotonic-ish wall clock; 0 = no backoff
 
     def cog_unload(self):
         self.reconcile_loop.cancel()
@@ -106,15 +127,18 @@ class Ingest(commands.Cog):
             except discord.HTTPException:
                 pass
 
-    @tasks.loop(seconds=45)
+    @tasks.loop(seconds=RECONCILE_PERIOD_SECONDS)
     async def reconcile_loop(self):
         """Safety-net loop. Normal path is inline-matched at ingest, so usually 0.
 
-        reconcile_once runs every 45s (cheap: B1 guard = 0 writes in steady state,
-        and the unmatched formula returns ~0 records). matcher.reload() is gated
-        by a 5-min TTL inside reload_matcher_if_stale() - it's a full Players+Aliases
-        scan and only needs to catch direct Airtable UI edits (bot-driven mutations
-        refresh the cache eagerly)."""
+        Period is env-tunable (default 6h — see RECONCILE_PERIOD_SECONDS). This
+        is a quota-preservation measure: Airtable's monthly API budget is hard,
+        and the old 45s cadence burned it while idle. On the monthly-limit
+        error (429 billing) the loop backs off to once every 24h until the
+        quota resets. matcher.reload() stays TTL-gated (5 min) inside
+        reload_matcher_if_stale() — bot-driven mutations refresh eagerly."""
+        if time.time() < self._quota_backoff_until:
+            return  # monthly quota exhausted — minimal probing only
         try:
             async with core.airtable_lock:
                 # Reload matcher cache (TTL-gated) to capture manual Airtable edits
@@ -124,7 +148,14 @@ class Ingest(commands.Cog):
                 logger.info("reconcile: reload=%s matched=%d review=%d unmatched=%d"
                             % (reloaded, s["matched"], s["review"], s["unmatched"]))
         except Exception as e:
-            logger.error("reconcile error: %s" % e, exc_info=True)
+            if _looks_like_billing_limit(e):
+                self._quota_backoff_until = time.time() + QUOTA_BACKOFF_SECONDS
+                logger.warning(
+                    "Airtable monthly quota exceeded — reconcile backing off for %ds. "
+                    "Inline ingest matching still works; safety-net resumes after reset.",
+                    QUOTA_BACKOFF_SECONDS)
+            else:
+                logger.error("reconcile error: %s" % e, exc_info=True)
 
     @app_commands.command(name="review", description="View recent records that need review.")
     async def review_list(self, interaction: discord.Interaction):

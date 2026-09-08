@@ -3,7 +3,7 @@
 > **단일 진실 원천 (Single Source of Truth).** 이 파일이 프로젝트의 기준점이다.
 > 다른 문서(IMPROVEMENT_PLAN.md, COMMANDS_GUIDE.md, DEPLOY_GUIDE 등)는 각각 특정 용도(roadmap, 사용자용 복붙, 배포)만 담당하며, 여기와 중복되는 내용이 충돌하면 **이 파일이 우선**이다.
 >
-> **Last updated: 2026-09-08**
+> **Last updated: 2026-09-09**
 
 ---
 
@@ -150,6 +150,11 @@ Champion's Queue/                         # repo root
 | `DECAY_THRESHOLD` | `800` | 이 미만 = Registered 역할 박탈 |
 | `DECAY_QUEUE_NAME` | `Champion's Queue` | sharedstats 통합 큐 이름 (MMR 읽기 소스) |
 | `DECAY_STATE_FILE` | `decay_state.json` | decay_applied / below_threshold 영속화 |
+| `DECAY_EPOCH` | `''` (자동 핀) | **재가동 사면 기준일**. idle 일수는 max(마지막 매치, epoch)부터 계산 — 재가동 전 결장이 감점 절벽(−20/일)으로 이어지지 않게 하는 안전장치. 비어 있으면 배포 후 첫 스윕이 당일로 핀하고 state에 영속화. 명시적 ISO 날짜 지정 가능 |
+| `DECAY_GATE_ENABLED` | `1` | 800 자격 게이트(Registered 박탈) 마스터 스위치. **게이트는 구조적 교착이 있다** — Registered 박탈 시 NeatQueue 입장이 막혀 매치로 MMR을 회복할 수 없음. 재가동 등 게이트를 중단할 때 `0` |
+| `RECONCILE_PERIOD_SECONDS` | `21600` (6h) | reconcile 안전망 루프 주기. **Airtable 월간 API 쿼터 보호** — 기존 45초 폴링은 월 ~15만 호출을 소진시켜 워크스페이스 쿼터를 고갈시킴(Free 1,000/월 하드스톱, 매월 1일 리셋). 성시즌에 45로 되돌릴 수 있음 |
+| `QUOTA_BACKOFF_SECONDS` | `86400` (24h) | Airtable 월간 한도(429 billing) 감지 시 reconcile 루프의 자동 백오프 주기 |
+| `MATCH_RETRY_PASSES` | `6` | MMR impact 데이터 재시도 상한(패스 수, 10분 루프 기준 ~1시간). 무제한 48h 재시도가 쿼터를 갉아먹는 것을 방지 |
 
 ---
 
@@ -196,7 +201,7 @@ Champion's Queue/                         # repo root
 - **6.4 MMR modifier**: 10분 루프, impact 공식 `round((impact-130)/70*10)` ±10, 시간창 `[mtime-2h,+4h]` + 참가자 필터/시리즈 클러스터링, 3중 이중적용 방어, backfill, 공개 미러
 - **6.5 큐 리마인더 & 잠금**: 매분 루프(NA 23:00 ET / EU 23:00 CET), T-2h→T-30min→LIVE→+3h lock, RSVP 패널+LIVE DM, manual-open 보호(24h)
 - **6.6 자가역할 & 팀**: `/rolepanel`, `/clearteam`(역할+Airtable+닉네임 태그), `on_member_update` 태그 정리
-- **6.7 휴면 부식 & 800 게이트**: Champs 정상(7일 grace, −10/−20) vs 비-Champs 관대(21일, −5/−10), floor 700, dead-day 전원 면제+동적 grace, 800 미만 Champs만 Registered 박탈/자동 복구, placement 5경기 면제
+- **6.7 휴면 부식 & 800 게이트**: Champs 정상(7일 grace, −10/−20) vs 비-Champs 관대(21일, −5/−10), floor 700, dead-day 전원 면제+동적 grace, **재가동 사면(`DECAY_EPOCH` — idle을 max(마지막 매치, epoch)부터 계산, 첫 스윕에 자동 핀)**, 800 미만 Champs만 Registered 박탈/자동 복구(**`DECAY_GATE_ENABLED=0`으로 중단 가능** — 박탈되면 매치로 회복할 수 없는 교착 구조), placement 5경기 면제, escalate_after에도 dead-days 연장 적용
 
 ---
 
@@ -254,6 +259,8 @@ python _smoke_test.py                             # 전체 회귀 테스트
 11. NeatQueue top-level `points` ≠ 큐 MMR → `queues[DECAY_QUEUE_NAME].mmr` 읽기
 12. dead-day엔 전원 decay 면제 + `dead_days`로 grace 동적 연장 (dry-run 미기록)
 13. Decay 계층 분기: Champs 정상 / 비-Champs 관대, 게이트는 Champs만 (`get_member` None → 비-Champs 취급)
+14. **Airtable 월간 API 쿼터는 하드스톱** (Free 1,000/월, 매월 1일 리셋). 상시 폴링 루프(45초 reconcile 등)는 금지 — `RECONCILE_PERIOD_SECONDS`(기본 6h)와 429-billing 자동 백오프(`QUOTA_BACKOFF_SECONDS`) 준수. 쿼터 소진 시 봇의 모든 Airtable 읽기/쓰기가 그 달 내 실패함
+15. **재가동/롱기크 후 decay 절벽**: `dead_days`는 첫 매치 다음 날 리셋되지만 결장 이력은 남는다 — idle은 반드시 `DECAY_EPOCH` 기준으로 클램프되어야 함 (smoke test G/G2 참조)
 
 ---
 

@@ -442,6 +442,11 @@ def _fake_get_mmr(discord_id):
 _orig_get_mmr = _core2.nq_get_mmr
 _core2.nq_get_mmr = _fake_get_mmr
 
+# Pin the relaunch epoch 30 days back so the "idle 8d" fixtures below measure
+# idle from last_match (amnesty must not clamp recent-fixture tests).
+from datetime import date as _date, timedelta as _td
+_core2.DECAY_EPOCH = (_date.today() - _td(days=30)).isoformat()
+
 _decay_calls = []
 def _fake_decay_add(user_id, value, channel_id=None):
     _decay_calls.append((str(user_id), int(value)))
@@ -576,6 +581,40 @@ dcogF2.dead_days = 0
 _run(dcogF2.run_sweep())
 assert _did in dcogF2.below_threshold, ("Champs below threshold must be gated", dcogF2.below_threshold)
 print("Gate Champs-only test F2 OK: Champs at 790 gated")
+
+# ---- Test G: relaunch amnesty — epoch clamps idle days ----
+# Player last seen 80d ago (pre-relaunch absence). With the epoch pinned to
+# TODAY (fresh Day 1), idle must clamp to ~0 -> no decay, no gate cliff.
+def _ancient_mmr(discord_id):
+    return (950.0, (_now - _dt2.timedelta(days=80)).timestamp(), 10)
+_core2.nq_get_mmr = _ancient_mmr
+_core2.DECAY_EPOCH = _date.today().isoformat()   # fresh relaunch, no persisted epoch
+dcogG = _decay.Decay.__new__(_decay.Decay)
+dcogG.bot = _FakeGuildBot(has_champs=True)
+dcogG.decay_applied = set()
+dcogG.below_threshold = set()
+dcogG.dead_days = 0
+_decay_calls.clear()
+_run(dcogG.run_sweep())
+assert _decay_calls == [], ("amnesty must block decay for pre-relaunch absence", _decay_calls)
+print("Relaunch amnesty test G OK: 80d-idle Champs player NOT decayed on Day 1")
+
+# And idle counting resumes from the epoch: 10 days after relaunch with no
+# match -> Champs base tier -10/day kicks in past the 7d grace.
+import json as _json, tempfile as _tf, os as _os
+_core2.DECAY_EPOCH = ""   # clear the env pin so the persisted epoch is used
+_ep = (_date.today() - _td(days=10)).isoformat()
+with open(_core2.DECAY_STATE_FILE, "w") as _f:
+    _f.write(_json.dumps({"decay_epoch": _ep}))
+dcogG2 = _decay.Decay.__new__(_decay.Decay)
+dcogG2.bot = _FakeGuildBot(has_champs=True)
+dcogG2.decay_applied = set()
+dcogG2.below_threshold = set()
+dcogG2.dead_days = 0
+_decay_calls.clear()
+_run(dcogG2.run_sweep())
+assert _decay_calls == [(_did, -10)], ("idle-from-epoch should decay -10 past grace", _decay_calls)
+print("Relaunch epoch idle-counting test G2 OK:", _decay_calls)
 
 # restore patched symbols
 _core2.nq_get_mmr = _orig_get_mmr

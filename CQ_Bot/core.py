@@ -97,6 +97,16 @@ DECAY_DRYRUN = os.getenv('DECAY_DRYRUN', '0') == '1'                # 1 = report
 # The playerstats payload nests stats per queue; only this key's mmr is authoritative.
 DECAY_QUEUE_NAME = os.getenv('DECAY_QUEUE_NAME', "Champion's Queue")
 DECAY_STATE_FILE = os.getenv('DECAY_STATE_FILE', 'decay_state.json')
+# Relaunch amnesty: idle days are measured from max(last_match, epoch). Pin an
+# explicit ISO date here to declare a fresh-start Day 1; empty = pinned
+# automatically on the first sweep after deploy (and persisted in state).
+DECAY_EPOCH = os.getenv('DECAY_EPOCH', '')
+# Master switch for the 800-point eligibility gate (Registered role revoke).
+# The gate has a structural deadlock: revoking Registered blocks NeatQueue
+# entry, so a gated player cannot play matches to climb back above 800.
+# Set 0 at relaunch (or whenever the deadlock bites) to suspend the gate;
+# decay itself is controlled independently by DECAY_ENABLED / DECAY_DRYRUN.
+DECAY_GATE_ENABLED = os.getenv('DECAY_GATE_ENABLED', '1') == '1'
 
 # --- Self-roles panel (region / weapon group / championship team) ---
 # Discord role granted when a player picks a championship team (also gates the Champs-only queue).

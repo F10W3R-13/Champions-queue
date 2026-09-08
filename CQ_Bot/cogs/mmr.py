@@ -14,6 +14,7 @@ from discord import app_commands
 import logging
 import asyncio
 import json
+import os
 from datetime import datetime, timezone, timedelta
 
 import core
@@ -30,6 +31,12 @@ MATCH_WINDOW_HOURS = 4      # screenshots for a match must be posted within this
 # the modifier sees no data.
 MATCH_WINDOW_LOOKBACK = 2
 MAX_MATCH_AGE_HOURS = 48    # ignore matches older than this (startup backlog guard)
+# Impact-data retry budget, in PASSES (not wall-clock). Each retry rescans the
+# full season's HP+SND records via Airtable pagination (~2-4 calls), so an
+# unbounded 48h retry window could burn hundreds of quota calls on a match
+# whose screenshots were never posted. 6 passes (~1h) is enough for the
+# normal "screenshots posted a few minutes late" case.
+MATCH_RETRY_PASSES = int(os.getenv('MATCH_RETRY_PASSES', '6'))
 # When a player has multiple impact records in a window (because two close
 # NeatQueue matches have overlapping windows AND the player played in both),
 # only cluster the records from the SAME series. Games within one Bo3 are
@@ -148,6 +155,7 @@ class MMRModifier(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.processed, self.backfilled, self.applied = load_state()
+        self.match_retries = {}  # match_key -> consecutive no-data passes
 
     def cog_unload(self):
         self.modifier_loop.cancel()
@@ -243,10 +251,26 @@ class MMRModifier(commands.Cog):
                 self.processed.add(key)
                 continue
             if result == "retry":
-                # OCR data not ready yet — do NOT mark as processed; retry next pass.
-                # The 48h max-age guard (above) is the eventual backstop.
+                # OCR data not ready yet — do NOT mark as processed; retry next
+                # pass, but only up to MATCH_RETRY_PASSES consecutive no-data
+                # passes (quota guard; see MATCH_RETRY_PASSES). The 48h max-age
+                # guard above remains the eventual backstop.
+                n = self.match_retries.get(key, 0) + 1
+                self.match_retries[key] = n
+                if n >= MATCH_RETRY_PASSES:
+                    logger.info("Match %s: no impact data after %d passes — giving up (quota guard).",
+                                key, n)
+                    await core.send_staff_log(
+                        self.bot,
+                        content=(f"⚠️ MMR modifier gave up on match at `{m.get('time')}` — no impact "
+                                 f"data after {n} passes (~{n * 10} min). Screenshots likely never "
+                                 f"posted. Use `/backfillmodifiers` if they appear later."))
+                    self.processed.add(key)
+                    self.match_retries.pop(key, None)
+                    save_state(self.processed, self.backfilled, self.applied)
                 continue
             self.processed.add(key)
+            self.match_retries.pop(key, None)
             handled += 1
             if result:
                 await core.send_staff_log(self.bot, embed=result)
