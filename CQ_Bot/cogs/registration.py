@@ -46,11 +46,12 @@ class Registration(commands.Cog):
             ign_link = ign_chan.mention if ign_chan else "#ign"
             await after.send(
                 "👋 **Welcome to Champion's Queue!**\n\n"
-                "You're verified — one step left to unlock the queue:\n"
-                f"1️⃣ Go to {ign_link} and run `/ign Your_In_Game_Name` "
-                "(exactly as it appears in CODM)\n"
-                "2️⃣ You'll automatically receive the **Registered** role\n"
-                "3️⃣ Hit **Join Queue** and play!\n\n"
+                "You're verified — two quick steps to unlock the queue:\n"
+                f"1️⃣ **Championship roster?** In #selfroles press **🏆 Team** and pick your team "
+                "— you'll get the **Champs** role (required for the league queue).\n"
+                f"2️⃣ Register your IGN: go to {ign_link} and run `/ign Your_In_Game_Name` "
+                "(exactly as it appears in CODM) — you'll automatically receive the **Registered** role.\n\n"
+                "The queue is open **daily 7:00 PM – 2:00 AM ET** — hit **Join Queue** in the queue channel and play!\n\n"
                 "Your match stats are tracked automatically — check them anytime with `/stats`."
             )
             logger.info("Sent IGN registration reminder DM to %s", after.name)
