@@ -261,6 +261,7 @@ python _smoke_test.py                             # 전체 회귀 테스트
 13. Decay 계층 분기: Champs 정상 / 비-Champs 관대, 게이트는 Champs만 (`get_member` None → 비-Champs 취급)
 14. **Airtable 월간 API 쿼터는 하드스톱** (Free 1,000/월, 매월 1일 리셋). 상시 폴링 루프(45초 reconcile 등)는 금지 — `RECONCILE_PERIOD_SECONDS`(기본 6h)와 429-billing 자동 백오프(`QUOTA_BACKOFF_SECONDS`) 준수. 쿼터 소진 시 봇의 모든 Airtable 읽기/쓰기가 그 달 내 실패함
 15. **재가동/롱기크 후 decay 절벽**: `dead_days`는 첫 매치 다음 날 리셋되지만 결장 이력은 남는다 — idle은 반드시 `DECAY_EPOCH` 기준으로 클램프되어야 함 (smoke test G/G2 참조)
+16. **부팅 경로에 Airtable 하드 의존 금지**: `core.py` import 시점의 `Matcher()` 콜드 로드가 429(쿼터 소진)로 죽으면 봇 전체가 exit 1 → Pterodactyl 크래시 루프. 2026-09-09 수정: 로드 실패 시 빈 `Matcher(eager=False)`로 폴백하고 reconcile 루프가 TTL 무시 재시도로 복구 (smoke test H). 새 모듈도 import 시점 API 호출 금지
 
 ---
 

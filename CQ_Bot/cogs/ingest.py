@@ -141,8 +141,17 @@ class Ingest(commands.Cog):
             return  # monthly quota exhausted — minimal probing only
         try:
             async with core.airtable_lock:
-                # Reload matcher cache (TTL-gated) to capture manual Airtable edits
-                reloaded = await asyncio.to_thread(core.reload_matcher_if_stale)
+                if not core.matcher.roster and not core.matcher.candidates:
+                    # Cold boot fell back to an empty cache (Airtable was
+                    # down/quota-dead at import). Keep retrying eagerly —
+                    # ignoring the TTL — until the backend answers, then the
+                    # normal TTL cadence takes over.
+                    reloaded = await asyncio.to_thread(
+                        core.reload_matcher_if_stale, True)
+                    if reloaded:
+                        logger.info("Matcher cache recovered after cold-boot fallback.")
+                else:
+                    reloaded = await asyncio.to_thread(core.reload_matcher_if_stale)
                 s = await asyncio.to_thread(core.reconcile_once)
             if reloaded or s["matched"] or s["review"]:
                 logger.info("reconcile: reload=%s matched=%d review=%d unmatched=%d"

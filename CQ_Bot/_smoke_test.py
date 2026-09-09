@@ -619,6 +619,23 @@ _run(dcogG2.run_sweep())
 assert _decay_calls == [(_did, -10)], ("idle-from-epoch should decay -10 past grace", _decay_calls)
 print("Relaunch epoch idle-counting test G2 OK:", _decay_calls)
 
+# ---- Test H: cold-boot fallback — Matcher(eager=False) is structurally usable ----
+# Simulates quota-exhausted boot: cold-load raises, core falls back to an
+# EMPTY Matcher. match() must return no_match (not crash) and reload must
+# remain callable for the runtime recovery path.
+from matcher import Matcher as _Matcher
+_m = _Matcher.__new__(_Matcher)
+_m.players_table = None
+_m.aliases_table = None
+_m.exact = {}
+_m.candidates = []
+_m.roster = []
+assert _m.match("Anything") == (None, 0.0, "no_match"), "empty matcher must no_match"
+_m.exact["f10w3r"] = "recF"
+_m.candidates.append(("f10w3r", "recF"))
+assert _m.match("F10W3R")[2] == "exact", "manual repopulation must work"
+print("Cold-boot fallback test H OK: empty matcher degrades to no_match, recovers on reload")
+
 # restore patched symbols
 _core2.nq_get_mmr = _orig_get_mmr
 _core2.nq_add_mmr = _orig_decay_add

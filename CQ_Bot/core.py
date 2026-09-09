@@ -216,8 +216,24 @@ MATCHER_RELOAD_TTL = int(os.getenv('MATCHER_RELOAD_TTL', '300'))  # 5 minutes
 # Serialize Airtable write sections
 airtable_lock = asyncio.Lock()
 
-# Initialize Matcher
-matcher = Matcher(players_table, aliases_table)
+# Initialize Matcher — BOOT MUST NOT REQUIRE AIRTABLE.
+# If Airtable is down / quota-exhausted at import time, start with an EMPTY
+# cache and let runtime paths (reconcile loop's TTL reload, /ign, /link)
+# populate it when the backend recovers. A cold boot during a quota
+# exhaustion used to crash the whole process before Discord connect
+# (Pterodactyl saw exit 1 + crash-loop; fixed 2026-09-09).
+matcher = None
+try:
+    matcher = Matcher(players_table, aliases_table)
+except Exception as _boot_err:
+    # Cold-load failed: fall back to an EMPTY Matcher object (not None) so
+    # every runtime access (matcher.exact, matcher.match, matcher.roster)
+    # still works structurally — OCR matches just become review/unmatched
+    # until a reload succeeds.
+    matcher = Matcher(players_table, aliases_table, eager=False)
+    logger.warning("Matcher cold-load failed (%s) — starting with empty cache. "
+                   "OCR matches will be Needs Review/unmatched until a reload succeeds.",
+                   _boot_err)
 
 # Last time matcher.reload() ran (monotonic-ish: wall clock is fine for a TTL gate).
 _matcher_reload_cache = {"t": 0.0}

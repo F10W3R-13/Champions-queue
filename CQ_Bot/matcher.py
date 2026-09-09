@@ -40,13 +40,14 @@ class Matcher:
     """Keeps Players(Primary IGN) + Aliases(all variants) in memory and
     matches with rapidfuzz. Call reload() to refresh the cache."""
 
-    def __init__(self, players_table, aliases_table):
+    def __init__(self, players_table, aliases_table, eager=True):
         self.players_table = players_table
         self.aliases_table = aliases_table
         self.exact = {}        # normalized_ign -> player_record_id
         self.candidates = []   # [(normalized_ign, player_record_id), ...]
         self.roster = []       # original Primary IGN spellings (layer-1 prompt hint)
-        self.reload()
+        if eager:
+            self.reload()
 
     def reload(self):
         """Load the whole master into memory. Call on boot + on new registration.
