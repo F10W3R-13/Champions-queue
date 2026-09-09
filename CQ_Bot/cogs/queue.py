@@ -1,25 +1,22 @@
 """Queue reminder system (unified, single queue).
 
-There is ONE shared queue (one NeatQueue channel, one lock bit). NA and EU are
-not separate queues — they are two daily *opening windows* for the same queue:
-  - NA window: opens 23:00 America/New_York (EST/EDT auto via zoneinfo) ≈ KST 12:00
-  - EU window: opens 23:00 Europe/Berlin     (CET/CEST auto via zoneinfo) ≈ KST 06:00
-Each window stays open ~3h. Anyone can play in either window. The queue is
-UNLOCKED when either window opens and LOCKED again only when BOTH have closed.
+S2 relaunch schedule (2026-09): ONE daily window, **19:00 → 02:00 America/New_York**
+(opens 7pm ET, closes 2am ET — the window crosses midnight). All phases are
+anchored to the session's OPEN date, so the 02:00 lock belongs to the session
+that opened the previous evening; the scheduler therefore considers BOTH
+today's and yesterday's anchor when looking for a due phase.
 
-Per window the bot auto-fires reminders from a tasks.loop(minutes=1):
-  - T-2h    : heads-up, no ping
-  - T-30min : Queue Ping role mentioned, RSVP count shown
-  - T-0 LIVE: Queue Ping role mentioned, points players to the Join Queue button
-              in QUEUE_JOIN_CHANNEL_ID (owned by NeatQueue, not this bot).
-
-The reminder embed is a UNIFIED view: regardless of which window triggered it,
-it always shows BOTH windows' times and the SINGLE shared RSVP roster. So a
-player who joins via the NA-window reminder is counted in the EU-window panel too.
+Per session the bot auto-fires reminders from a tasks.loop(minutes=1):
+  - T-2h (17:00 ET) : heads-up, no ping
+  - T-30min (18:30 ET): Queue Ping role mentioned, RSVP count shown
+  - T-0 LIVE (19:00 ET): Queue Ping role mentioned, points players to the Join
+    Queue button in QUEUE_JOIN_CHANNEL_ID (owned by NeatQueue, not this bot),
+    and UNLOCKS the queue via the NeatQueue API.
+  - +7h (02:00 ET)  : NeatQueue LOCK.
 
 RSVP model: this bot tracks a *soft* RSVP roster (intent to play) on disk, keyed
-by date only (no session dimension). It does NOT own queue joins — players still
-join via NeatQueue's interactive panel. The count is shown as
+by the session's anchor date. It does NOT own queue joins — players still join
+via NeatQueue's interactive panel. The count is shown as
 "X reserved · Y to fill the next 10-player lobby", emphasizing the CoD 5v5 /
 multiple-of-10 cliff (unlike F1's soft cap, ours is a hard step).
 
@@ -38,32 +35,28 @@ from discord import app_commands
 import logging
 import asyncio
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time as dtime
 from zoneinfo import ZoneInfo
 
 import core
 
 logger = logging.getLogger("CQ_Bot.queue")
 
-# --- Opening windows (wall-clock, DST-safe via zoneinfo named zones) ---
-# Each window: open time in its own timezone. zoneinfo handles EST<->EDT, CET<->CEST.
-# These are WINDOWS into one shared queue, not separate queues.
+# --- Opening window (wall-clock, DST-safe via zoneinfo named zones) ---
 WINDOWS = [
-    {"key": "na", "tz": ZoneInfo("America/New_York"), "hour": 23, "minute": 0, "label": "NA"},
-    {"key": "eu", "tz": ZoneInfo("Europe/Berlin"), "hour": 23, "minute": 0, "label": "EU"},
+    {"key": "et", "tz": ZoneInfo("America/New_York"), "hour": 19, "minute": 0, "label": "ET"},
 ]
-# Each window stays open this long once opened. The queue is UNLOCKED when a window
-# opens and LOCKED again only when NO window is currently active (union semantics).
-WINDOW_HOURS = 3
+# The window stays open this long once opened (19:00 -> 02:00 next day).
+WINDOW_HOURS = 7
 
 # (phase_key, minutes_offset_from_open). Negative = before open (reminders);
 # 0 = open (LIVE message + unlock); positive = after open (lock candidate).
-# Order = chronological for a given window.
+# Order = chronological for a given anchor date.
 PHASES = [
-    ("t2h", -120),     # 2h before: heads-up reminder
-    ("t30", -30),      # 30min before: final reminder + ping
-    ("live", 0),       # open: LIVE message + ping + NeatQueue UNLOCK
-    ("lock", WINDOW_HOURS * 60),  # window end: NeatQueue LOCK (skipped if other window still open)
+    ("t2h", -120),     # 17:00 ET: heads-up reminder
+    ("t30", -30),      # 18:30 ET: final reminder + ping
+    ("live", 0),       # 19:00 ET: LIVE message + ping + NeatQueue UNLOCK
+    ("lock", WINDOW_HOURS * 60),  # 02:00 ET next day: NeatQueue LOCK
 ]
 
 PLAYERS_PER_LOBBY = 10  # CoD 5v5 hard step
@@ -113,30 +106,36 @@ def _fire_key(window_key, phase_key, date_str):
 
 # ============================ Time helpers ============================
 
-def _window_date_and_open_utc(window):
-    """For "today" in the window's tz, return (date_str_in_tz, open_dt_utc).
+def _window_anchor_utc(window, local_day_offset=0):
+    """For the local date `today + local_day_offset` in the window's tz, return
+    (date_str_in_tz, open_dt_utc). local_day_offset=-1 looks at YESTERDAY's
+    anchor — required because the 02:00 lock (anchor + 7h) lands on the next
+    calendar day in ET.
 
     Computed fresh each loop tick from datetime.now(timezone.utc) so DST is correct.
     """
     now_utc = datetime.now(timezone.utc)
     now_local = now_utc.astimezone(window["tz"])
-    date_str = now_local.strftime("%Y-%m-%d")
-    # Build open time in local tz, then convert to UTC.
-    open_local = now_local.replace(
+    anchor_local = now_local + timedelta(days=local_day_offset)
+    date_str = anchor_local.strftime("%Y-%m-%d")
+    open_local = anchor_local.replace(
         hour=window["hour"], minute=window["minute"], second=0, microsecond=0)
     open_utc = open_local.astimezone(timezone.utc)
     return date_str, open_utc
 
 
-def _is_window_active(window, now_utc):
-    """True if `now_utc` is inside this window's open..close range for today."""
-    date_str, open_utc = _window_date_and_open_utc(window)
+def _is_window_active(window, now_utc, local_day_offset=0):
+    """True if `now_utc` is inside this window's open..close range for the
+    given anchor day (used with offset 0 and -1 to cover midnight-crossing)."""
+    date_str, open_utc = _window_anchor_utc(window, local_day_offset)
     close_utc = open_utc + timedelta(hours=WINDOW_HOURS)
     return open_utc <= now_utc < close_utc
 
 
 def _any_window_active(now_utc):
-    return any(_is_window_active(w, now_utc) for w in WINDOWS)
+    return any(
+        _is_window_active(w, now_utc, off)
+        for w in WINDOWS for off in (0, -1))
 
 
 # ============================ Embed builders ============================
@@ -187,24 +186,23 @@ def _parse_footer_date(embed):
 
 
 def _window_times_line(now_utc):
-    """One-line summary of both windows' open times in their own local tz, for the embed.
+    """One-line summary of the window's open/close in ET, for the embed.
 
-    Computed fresh so DST is always correct. Shows each window's open time in its
-    own local tz (ET / CET)."""
+    Computed fresh so DST is always correct."""
     parts = []
     for w in WINDOWS:
-        _, open_utc = _window_date_and_open_utc(w)
-        local = open_utc.astimezone(w["tz"]).strftime("%H:%M")
-        flag = "🇺🇸" if w["key"] == "na" else "🇪🇺"
-        parts.append(f"{flag} **{w['label']} {local}** ET" if w["key"] == "na" else f"{flag} **{w['label']} {local}** CET")
+        _, open_utc = _window_anchor_utc(w)
+        local_open = open_utc.astimezone(w["tz"])
+        local_close = (open_utc + timedelta(hours=WINDOW_HOURS)).astimezone(w["tz"])
+        parts.append(
+            f"🇺🇸 **{local_open.strftime('%H:%M')} – {local_close.strftime('%H:%M')} {w['label']}**")
     return " · ".join(parts)
 
 
 async def build_reminder_embed(bot, phase_key, date_str, state):
     """Construct the UNIFIED embed for a phase. Reads the shared RSVP roster.
 
-    Always shows both windows' times and the single shared roster, regardless of
-    which window triggered this phase. phase copy is keyed on phase_key."""
+    Shows the single window's open/close times and the shared roster."""
     rsvp_ids = _rsvp_list(state, date_str)
 
     def member_lookup(uid):
@@ -217,26 +215,24 @@ async def build_reminder_embed(bot, phase_key, date_str, state):
     if phase_key == "live":
         title = "🔴 LIVE — Queue Open"
         desc = (f"The queue is now **open**!\n\n"
-                f"👉 Go to {join_mention} and press the **Join Queue** button to get in. "
-                f"Anyone can play in either window.")
+                f"👉 Go to {join_mention} and press the **Join Queue** button to get in.")
         color = 0x2ECC71  # green = live
     elif phase_key == "t30":
         title = "⏰ Queue — 30 min"
-        desc = ("A queue window opens in **30 minutes**.\n"
-                "Lock in your spot below — the roster is shared across both windows.")
+        desc = ("The queue opens in **30 minutes**.\n"
+                "Lock in your spot below so we can fill the first lobby fast.")
         color = 0xF1C40F  # yellow = soon
     else:  # t2h
         title = "📣 Queue — 2 hours"
-        desc = ("A queue window opens in **2 hours**.\n"
-                "Reserve your spot below so we can fill the first lobby fast. "
-                "The roster is shared — joining here counts for both windows.")
+        desc = ("The queue opens in **2 hours**.\n"
+                "Reserve your spot below so we can fill the first lobby fast.")
         color = 0x5865F2  # blurple = heads-up
 
     embed = discord.Embed(title=title, description=desc, color=color)
     embed.add_field(name="🎟️ RSVP", value=_rsvp_field_value(rsvp_ids, member_lookup), inline=False)
 
     embed.add_field(
-        name="🌍 Today's windows",
+        name="🌍 Today's window",
         value=_window_times_line(datetime.now(timezone.utc)),
         inline=False)
 
@@ -403,46 +399,33 @@ class Queue(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def reminder_loop(self):
-        """Each minute, check if any (window, phase) boundary was crossed now.
+        """Each minute, check if any (anchor-day, phase) boundary was crossed now.
 
-        Phases (offset from window open):
-          t2h (-120min), t30 (-30min), live (0), lock (+3h).
-        Lock has UNION semantics: a window's lock is SKIPPED if any other window
-        is still active, so the shared queue stays open as long as either window
-        is in session. Reminder messages always render the unified view (both
-        windows + shared roster)."""
+        The session is anchored to its OPEN date (19:00 ET). Because the window
+        crosses midnight (lock at 02:00 ET = anchor + 7h), a phase can be due
+        from EITHER today's or yesterday's anchor — both are checked. The lock
+        fires when the window for its anchor day ends; with a single window
+        there is no union skip anymore (manual-open protection still applies)."""
         try:
             now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
             state = await asyncio.to_thread(_load_state)
             dirty = False
 
             for window in WINDOWS:
-                date_str, open_utc = _window_date_and_open_utc(window)
-                for phase_key, minutes_offset in PHASES:
-                    phase_utc = open_utc + timedelta(minutes=minutes_offset)
-                    if phase_utc != now_utc:
-                        continue
-                    fkey = _fire_key(window["key"], phase_key, date_str)
-                    if fkey in state["fired"]:
-                        continue
-
-                    # UNION guard for lock: if any OTHER window is currently active,
-                    # skip this lock so the shared queue stays open.
-                    if phase_key == "lock":
-                        other_active = any(
-                            _is_window_active(w, now_utc) and w["key"] != window["key"]
-                            for w in WINDOWS)
-                        if other_active:
-                            logger.info("Lock for %s window skipped — another window is still open.",
-                                        window["key"])
-                            state["fired"].append(fkey)  # don't retry; union resolved it
-                            dirty = True
+                for day_off in (0, -1):
+                    date_str, open_utc = _window_anchor_utc(window, day_off)
+                    for phase_key, minutes_offset in PHASES:
+                        phase_utc = open_utc + timedelta(minutes=minutes_offset)
+                        if phase_utc != now_utc:
+                            continue
+                        fkey = _fire_key(window["key"], phase_key, date_str)
+                        if fkey in state["fired"]:
                             continue
 
-                        # MANUAL OPEN guard: if staff ran /unlock manually, don't let the
-                        # scheduled auto-lock overwrite their open. Honor it for up to 24h,
-                        # after which we expire the flag (safety net for forgotten opens).
-                        if state.get("manual_open"):
+                        # MANUAL OPEN guard: if staff ran /unlock manually, don't let
+                        # the scheduled auto-lock overwrite their open. Honor it for
+                        # up to 24h, then expire (safety net for forgotten opens).
+                        if phase_key == "lock" and state.get("manual_open"):
                             since = state.get("manual_open_since")
                             expired = True
                             if since:
@@ -464,20 +447,20 @@ class Queue(commands.Cog):
                                 dirty = True
                                 continue
 
-                    # NEW: clear manual_open when a new scheduled session starts, so a
-                    # manual open from yesterday doesn't suppress today's auto-lock.
-                    if phase_key == "live" and state.get("manual_open"):
-                        logger.info("New scheduled session starting — clearing manual_open flag.")
-                        state["manual_open"] = False
-                        state.pop("manual_open_since", None)
-                        dirty = True
+                        # Clear manual_open when a new scheduled session starts, so a
+                        # manual open from yesterday doesn't suppress today's auto-lock.
+                        if phase_key == "live" and state.get("manual_open"):
+                            logger.info("New scheduled session starting — clearing manual_open flag.")
+                            state["manual_open"] = False
+                            state.pop("manual_open_since", None)
+                            dirty = True
 
-                    fired_ok = await self._post_phase(window, phase_key, state, date_str)
-                    # Only mark as fired if the action actually succeeded — this is
-                    # the retry-on-next-minute safety net for transient NQ API errors.
-                    if fired_ok:
-                        state["fired"].append(fkey)
-                        dirty = True
+                        fired_ok = await self._post_phase(window, phase_key, state, date_str)
+                        # Only mark as fired if the action actually succeeded — this is
+                        # the retry-on-next-minute safety net for transient NQ API errors.
+                        if fired_ok:
+                            state["fired"].append(fkey)
+                            dirty = True
 
             if dirty:
                 await asyncio.to_thread(_save_state, state)
