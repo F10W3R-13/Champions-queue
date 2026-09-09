@@ -4,12 +4,15 @@ import logging
 import os
 import asyncio
 
-# Configure logging
+# Configure logging — RotatingFileHandler keeps bot.log bounded (it grew to
+# 463MB on the server from two months of 45s-loop 429 spam; fixed 2026-09).
+import logging.handlers
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     handlers=[
-        logging.FileHandler("bot.log", encoding="utf-8"),
+        logging.handlers.RotatingFileHandler(
+            "bot.log", maxBytes=10_000_000, backupCount=2, encoding="utf-8"),
         logging.StreamHandler()
     ]
 )
