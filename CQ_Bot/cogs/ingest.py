@@ -21,7 +21,14 @@ logger = logging.getLogger("CQ_Bot.ingest")
 #     backs off to once every 24h until the quota resets (1st of month UTC).
 RECONCILE_PERIOD_SECONDS = int(os.getenv('RECONCILE_PERIOD_SECONDS', '43200'))  # 12h
 QUOTA_BACKOFF_SECONDS = int(os.getenv('QUOTA_BACKOFF_SECONDS', '86400'))        # 24h
-_BILLING_LIMIT_MARKERS = ("PUBLIC_API_BILLING_LIMIT_EXCEEDED", "billing plan limit")
+# Two shapes of the same monthly-quota error:
+#  1) pyairtable sometimes surfaces the body: "PUBLIC_API_BILLING_LIMIT_EXCEEDED"
+#  2) more often urllib3's Retry swallows the 429 body (where the marker lives)
+#     and raises RetryError with only "...too many 429 error responses...".
+# At our call volume (<=1 call/12h from reconcile) a genuine 5/s rate limit is
+# implausible, so ANY persistent 429 here is treated as the monthly quota.
+_BILLING_LIMIT_MARKERS = ("PUBLIC_API_BILLING_LIMIT_EXCEEDED", "billing plan limit",
+                          "too many 429 error responses")
 
 
 def _looks_like_billing_limit(exc: Exception) -> bool:
