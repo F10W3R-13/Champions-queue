@@ -111,7 +111,7 @@ Champion's Queue/                         # repo root
 | `WEEKLY_LEADERBOARD_CHANNEL_ID` | `0` (→ staff logs) | 주간 리더보드 |
 | `MMR_PUBLIC_CHANNEL_ID` | `0` (비활성) | MMR modifier 공개 요약 미러. **실제 .env 값: `1512331781758652546` (#results) — 활성 상태** (2026-09-09 확인). modifier가 적용될 때마다 #results에 플레이어용 요약 게시 |
 | `IGN_HELP_CHANNEL_ID` | `0` | #ign — 등록 가이드 패널 |
-| `QUEUE_JOIN_CHANNEL_ID` | `1514827048885948516` | #queue-2026champs — NeatQueue join 버튼 |
+| `QUEUE_JOIN_CHANNEL_ID` | `1512331710736633906` | **#queue** — 라이브 큐 채널 (72명 MMR 풀의 실제 소유자; 2026-09-09 S2 전환. 이전 값 `1514827048885948516` #queue-2026champs는 매치 0건) |
 | `QUEUE_REMINDER_CHANNEL_ID` | `0` (→ join 채널) | 리마인더/RSVP 발화 채널 |
 | `QUEUE_PING_ROLE_ID` | `0` | "Queue Ping" 역할 (T-30min/LIVE 핑) |
 | `REGISTERED_ROLE_ID` | `0` | "Registered" — /ign 시 부여, NeatQueue 게이트 |
@@ -148,7 +148,7 @@ Champion's Queue/                         # repo root
 | `DECAY_ESCALATE_RATE_NONCHAMPS` | `10` | 비-Champs 가속 티어 일일 감점량 |
 | `DECAY_FLOOR` | `700` | MMR 하한 (이 이하로는 안 떨어짐) |
 | `DECAY_THRESHOLD` | `800` | 이 미만 = Registered 역할 박탈 |
-| `DECAY_QUEUE_NAME` | `Champion's Queue` | sharedstats 통합 큐 이름 (MMR 읽기 소스) |
+| `DECAY_QUEUE_NAME` | `Champion's Queue - Inagural Season` | **실제 MMR 풀 큐 이름** (#queue 채널 소유, 72명 전원). 2026-09-09 교정 전 기본값 `Champion's Queue`는 1엔트리짜리 유령 큐였음 — decay/MMR 읽기가 몇 달간 잘못된 큐를 봄 |
 | `DECAY_STATE_FILE` | `decay_state.json` | decay_applied / below_threshold 영속화 |
 | `DECAY_EPOCH` | `''` (자동 핀) | **재가동 사면 기준일**. idle 일수는 max(마지막 매치, epoch)부터 계산 — 재가동 전 결장이 감점 절벽(−20/일)으로 이어지지 않게 하는 안전장치. 비어 있으면 배포 후 첫 스윕이 당일로 핀하고 state에 영속화. 명시적 ISO 날짜 지정 가능 |
 | `DECAY_GATE_ENABLED` | `1` | 800 자격 게이트(Registered 박탈) 마스터 스위치. **게이트는 구조적 교착이 있다** — Registered 박탈 시 NeatQueue 입장이 막혀 매치로 MMR을 회복할 수 없음. 재가동 등 게이트를 중단할 때 `0` |
@@ -199,7 +199,7 @@ Champion's Queue/                         # repo root
 - **6.2 통계 & 시즌**: `/stats`(DM)·`/leaderboard`(**지표 5종으로 축소 — 2026-09: K/D, Impact, Games, OBJ(HP), ADR(SND). 고급 지표는 /seasonreport·주간 포스트로 이동**), 시즌/주간 리포트 + 월요일 12:00 UTC 루프(**주간 3섹션: ZCS·DPD·Assist%(SND)**), Advanced 지표(DPD/DPK/ZCS/Assist %)는 /stats 카드에 유지
 - **6.3 OCR 수집**: #results 이미지 2장 → GPT-4.1 vision → Airtable, 45초 reconcile 루프, 3-stage matcher, `/review`·`/link`·`/unlink`·`/reject`
 - **6.4 MMR modifier**: 10분 루프, impact 공식 `round((impact-130)/70*10)` ±10, 시간창 `[mtime-2h,+4h]` + 참가자 필터/시리즈 클러스터링, 3중 이중적용 방어, backfill, 공개 미러
-- **6.5 큐 리마인더 & 잠금**: 매분 루프(NA 23:00 ET / EU 23:00 CET), T-2h→T-30min→LIVE→+3h lock, RSVP 패널+LIVE DM, manual-open 보호(24h)
+- **6.5 큐 리마인더 & 잠금**: 매분 루프, **S2 단일 창구 19:00–02:00 ET (자정 넘김 — 앵커는 개장일, 스케줄러는 오늘/어제 앵커 이중 검사)**, T-2h(17:00)→T-30min(18:30)→LIVE(19:00)→+7h 잠금(02:00), RSVP 패널+LIVE DM, manual-open 보호(24h)
 - **6.6 자가역할 & 팀**: `/rolepanel`, `/clearteam`(역할+Airtable+닉네임 태그), `on_member_update` 태그 정리. **Weapon 셀렉터는 채택률 84%(137/163명, 2026-09-09 Discord 조사)로 KEEP 확정** — 통계에 안 쓰여도 소셜 표식으로 기능 중. 단순 "미사용=제거" 가설은 데이터로 기각된 사례
 - **6.7 휴면 부식 & 800 게이트**: Champs 정상(7일 grace, −10/−20) vs 비-Champs 관대(21일, −5/−10), floor 700, dead-day 전원 면제+동적 grace, **재가동 사면(`DECAY_EPOCH` — idle을 max(마지막 매치, epoch)부터 계산, 첫 스윕에 자동 핀)**, 800 미만 Champs만 Registered 박탈/자동 복구(**`DECAY_GATE_ENABLED=0`으로 중단 가능** — 박탈되면 매치로 회복할 수 없는 교착 구조), placement 5경기 면제, escalate_after에도 dead-days 연장 적용
 

@@ -95,7 +95,11 @@ DECAY_THRESHOLD = int(os.getenv('DECAY_THRESHOLD', '800'))          # below this
 DECAY_DRYRUN = os.getenv('DECAY_DRYRUN', '0') == '1'                # 1 = report only, don't apply / revoke
 # NeatQueue queue name whose stats we read (sharedstats-merged shared queue).
 # The playerstats payload nests stats per queue; only this key's mmr is authoritative.
-DECAY_QUEUE_NAME = os.getenv('DECAY_QUEUE_NAME', "Champion's Queue")
+DECAY_QUEUE_NAME = os.getenv('DECAY_QUEUE_NAME', "Champion's Queue - Inagural Season")
+# NOTE (2026-09-09): the REAL pool where all players' MMR lives is the
+# "#queue" channel's queue, named "Champion's Queue - Inagural Season".
+# The old default ("Champion's Queue") pointed at a 1-entry ghost queue —
+# decay/MMR reads silently saw nothing for months.
 DECAY_STATE_FILE = os.getenv('DECAY_STATE_FILE', 'decay_state.json')
 # Relaunch amnesty: idle days are measured from max(last_match, epoch). Pin an
 # explicit ISO date here to declare a fresh-start Day 1; empty = pinned
