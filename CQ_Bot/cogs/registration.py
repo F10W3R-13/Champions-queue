@@ -51,7 +51,7 @@ class Registration(commands.Cog):
                 "— you'll get the **Champs** role (required for the league queue).\n"
                 f"2️⃣ Register your IGN: go to {ign_link} and run `/ign Your_In_Game_Name` "
                 "(exactly as it appears in CODM) — you'll automatically receive the **Registered** role.\n\n"
-                "The queue is open **daily 7:00 PM – 2:00 AM ET** — hit **Join Queue** in the queue channel and play!\n\n"
+                "The queue is open **daily 7:00 PM – 4:00 AM ET** — hit **Join Queue** in the queue channel and play!\n\n"
                 "Your match stats are tracked automatically — check them anytime with `/stats`."
             )
             logger.info("Sent IGN registration reminder DM to %s", after.name)
@@ -94,8 +94,8 @@ class Registration(commands.Cog):
             if core.check_duplicate_ign(ign_name):
                 await interaction.followup.send(
                     f"❌ **Registration Rejected**: The IGN `{ign_name}` (or a variation of it) is already registered by another player. "
-                    "If you believe this is an error, please contact a staff member."
-                )
+                    "If you believe this is an error, please contact a staff member.",
+                    ephemeral=True)
                 return
 
             existing_rec = await asyncio.to_thread(core.player_record_by_discord, discord_id)
@@ -103,7 +103,8 @@ class Registration(commands.Cog):
                 # Genuinely already registered: self-heal the queue-access role and stop.
                 await self._grant_registered_role(interaction)
                 await interaction.followup.send(
-                    f"You are already registered. (Current IGN: **{existing_rec['fields']['Primary IGN']}**)")
+                    f"You are already registered. (Current IGN: **{existing_rec['fields']['Primary IGN']}**)",
+                    ephemeral=True)
                 return
 
             if existing_rec:
@@ -151,11 +152,16 @@ class Registration(commands.Cog):
             if role_granted:
                 msg += "✅ Queue access granted - you can now join the queue.\n"
             msg += "You can now use `/stats` to check your records."
-            await interaction.followup.send(msg)
+            # Ephemeral: only the registrant sees the success note — keeps #ign
+            # clean so the guide panel never gets buried by registration spam.
+            await interaction.followup.send(msg, ephemeral=True)
+            await self._cleanup_ign_channel(interaction)
             
         except Exception as e:
             logger.error("Error during registration for %s: %s", discord_handle, e, exc_info=True)
-            await interaction.followup.send("An error occurred while registering. Please try again later or contact an admin.")
+            await interaction.followup.send(
+                "An error occurred while registering. Please try again later or contact an admin.",
+                ephemeral=True)
 
     @app_commands.command(name="changeign", description="Change your registered In-Game Name (IGN).")
     @app_commands.describe(new_ign="Your new Call of Duty Mobile in-game name")
@@ -249,6 +255,42 @@ class Registration(commands.Cog):
         except Exception as e:
             logger.error("Error during role sync: %s", e, exc_info=True)
             await interaction.followup.send(f"❌ Error during sync: {e}")
+
+    async def _cleanup_ign_channel(self, interaction):
+        """After a successful /ign, delete OTHER members' recent slash-command
+        clutter in #ign so the guide panel never gets buried (selfroles-style
+        clean channel). Only touches non-staff, non-bot, non-panel messages;
+        keeps the last 30 days of history. Best-effort — never raises."""
+        try:
+            if interaction.channel_id != core.IGN_HELP_CHANNEL_ID:
+                return  # only auto-clean the dedicated #ign channel
+            guild = interaction.guild
+            if not guild:
+                return
+            def _is_staff_member(m):
+                if m.guild_permissions.administrator:
+                    return True
+                return any("staff" in r.name.lower() or "admin" in r.name.lower()
+                           for r in m.roles)
+            staff_ids = {m.id for m in guild.members if _is_staff_member(m)}
+            cutoff = discord.utils.utcnow() - __import__("datetime").timedelta(days=30)
+            purged = 0
+            async for m in interaction.channel.history(limit=100):
+                if m.created_at < cutoff or purged >= 50:
+                    break
+                if m.author.bot or m.pinned or m.type != discord.MessageType.default:
+                    continue
+                if m.author.id in staff_ids:
+                    continue
+                try:
+                    await m.delete()
+                    purged += 1
+                except (discord.Forbidden, discord.NotFound):
+                    continue
+            if purged:
+                logger.info("#ign cleanup: removed %d registration-clutter messages.", purged)
+        except Exception as e:
+            logger.warning("#ign cleanup failed (non-fatal): %s", e)
 
     # ------------------------------------------------------------------
     # Registration help panel + NeatQueue rejection auto-helper

@@ -149,6 +149,12 @@ WEAPON_ROLE_NAMES = {
 # Discord role to ping on T-30min / T-0 LIVE reminders. Created by setup scripts
 # ("Queue Ping"); ID resolved from .env.
 QUEUE_PING_ROLE_ID = int(os.getenv('QUEUE_PING_ROLE_ID', '0'))
+# Extra role pinged at LIVE when the RSVP roster is hot (>= QUEUE_NA_PING_THRESHOLD).
+# Default = the "NA/LATAM" self-role (2026-09-10: rally the NA squad when a lobby
+# is filling). 0 = feature disabled.
+QUEUE_NA_PING_ROLE_ID = int(os.getenv('QUEUE_NA_PING_ROLE_ID', '1512533731838263576'))
+# RSVP count needed at LIVE to add the NA squad ping on top of Queue Ping.
+QUEUE_NA_PING_THRESHOLD = int(os.getenv('QUEUE_NA_PING_THRESHOLD', '5'))
 # Channel where players actually JOIN the queue (NeatQueue's interactive panel).
 # Verified queue channels via GET /api/v1/queuechannels: "queue" and "queue-2026champs".
 # Default = queue-2026champs (pilot channel). Set QUEUE_JOIN_CHANNEL_ID to override.

@@ -70,7 +70,7 @@ The bot posts to the staff log channel automatically when:
 
 > `/queuepanel` — Post the RSVP queue panel manually (normally auto-fired 2h before each session window). Use for testing.
 
-> `/queuepause [on|off]` — Pause or resume the T-2h / T-30min queue reminders. While paused, the 19:00 LIVE post still goes out (without the @Queue Ping) and the queue still unlocks/locks on schedule — only the two reminder posts are suppressed. State persists across restarts.
+> `/queuepause [on|off]` — Pause or resume the T-30min queue reminder. While paused, the 19:00 LIVE post still goes out (with no role pings) and the queue still unlocks/locks on schedule. State persists across restarts.
 
 > `/ignhelp` — Post the IGN registration guide panel in the current channel. Pin it in #ign so blocked players can find help.
 

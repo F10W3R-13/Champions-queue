@@ -33,12 +33,14 @@
 - **NeatQueue "User not found"**: 영구 에러 → `⏭ not in NQ`로 graceful skip
 
 ## 5. 큐 리마인더 & 잠금 자동화
-- **reminder_loop** (매분): **S2 단일 창구 19:00–02:00 ET** (자정 넘김 — 앵커는 개장일, 스케줄러는 오늘/어제 앵커 이중 검사)
-- **Phases**: T-2h 17:00 ET (준비) → T-30min 18:30 ET (Queue Ping) → LIVE 19:00 ET (메시지 + unlock + RSVP DM) → lock 02:00 ET (+7h)
+- **reminder_loop** (매분): **단일 창구 19:00–04:00 ET** (9시간, 자정 넘김 — 앵커는 개장일, 스케줄러는 오늘/어제 앵커 이중 검사)
+- **Phases**: T-30min 18:30 ET (Queue Ping) → LIVE 19:00 ET (메시지 + unlock + RSVP DM, RSVP 5+면 NA/LATAM 핑 추가) → lock 04:00 ET (+9h) — t2h는 2026-09-10 제거
 - **RSVP 패널**: 날짜 키 공유 명단, Join/Leave/Refresh 버튼, "X reserved — Y more to fill next 5v5 lobby"
 - **LIVE DM**: RSVP 명단에게 "지금 들어가!" 디엠 (unlock 완료 후)
 - **잠금 동기화**: LIVE 메시지와 NeatQueue unlock을 같은 tick에
-- **리마인더 정지 `/queuepause on|off`** (2026-09-10): 정지 중 t2h/t30 게시 스킵(fired 마킹 — 재개 시 몰아치기 없음), LIVE는 @Queue Ping 없이 게시+언락 유지, 02:00 lock 무관. `queue_state.json`의 `reminders_paused`로 영속(재시작 생존)
+- **리마인더 정지 `/queuepause on|off`** (2026-09-10): 정지 중 t30 게시 스킵(fired 마킹 — 재개 시 몰아치기 없음), LIVE는 역할 핑 없이 게시+언락 유지, 04:00 lock 무관. `queue_state.json`의 `reminders_paused`로 영속(재시작 생존)
+- **조건부 NA 핑** (2026-09-10): LIVE 시점 RSVP ≥ `QUEUE_NA_PING_THRESHOLD`(5)면 Queue Ping에 NA/LATAM 멘션 추가 + 임베드에 'NA squad rallied' 필드 — 북미 애들 집합 신호
+- **#ign 채널 자동 청소** (2026-09-10): /ign 성공 시 채널 내 최근 비봇·비스태프·비고정 메시지 최대 50개 삭제(30일 컷), 등록 응답은 전부 ephemeral — 가이드 패널이 묻히지 않음
 - **수동 /unlock 보호**: `on_interaction`으로 감지, `manual_open` 플래그로 자동 lock 스킵 (24h 안전장치)
 - **KST 미표기**: 서버가 EN/ES 기반이므로 윈도우 현지 시간만 표시
 

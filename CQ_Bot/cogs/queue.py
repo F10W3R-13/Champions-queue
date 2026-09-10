@@ -1,18 +1,18 @@
 """Queue reminder system (unified, single queue).
 
-S2 relaunch schedule (2026-09): ONE daily window, **19:00 → 02:00 America/New_York**
+S2 schedule (updated 2026-09-10): ONE daily window, **19:00 → 04:00 America/New_York**
 (opens 7pm ET, closes 2am ET — the window crosses midnight). All phases are
-anchored to the session's OPEN date, so the 02:00 lock belongs to the session
+anchored to the session's OPEN date, so the 04:00 lock belongs to the session
 that opened the previous evening; the scheduler therefore considers BOTH
 today's and yesterday's anchor when looking for a due phase.
 
 Per session the bot auto-fires reminders from a tasks.loop(minutes=1):
-  - T-2h (17:00 ET) : heads-up, no ping
   - T-30min (18:30 ET): Queue Ping role mentioned, RSVP count shown
-  - T-0 LIVE (19:00 ET): Queue Ping role mentioned, points players to the Join
-    Queue button in QUEUE_JOIN_CHANNEL_ID (owned by NeatQueue, not this bot),
-    and UNLOCKS the queue via the NeatQueue API.
-  - +7h (02:00 ET)  : NeatQueue LOCK.
+  - T-0 LIVE (19:00 ET): Queue Ping role mentioned (+ NA/LATAM when RSVP >=
+    QUEUE_NA_PING_THRESHOLD), points players to the Join Queue button in
+    QUEUE_JOIN_CHANNEL_ID (owned by NeatQueue, not this bot), and UNLOCKS the
+    queue via the NeatQueue API.
+  - +9h (04:00 ET)  : NeatQueue LOCK.
 
 RSVP model: this bot tracks a *soft* RSVP roster (intent to play) on disk, keyed
 by the session's anchor date. It does NOT own queue joins — players still join
@@ -22,7 +22,7 @@ multiple-of-10 cliff (unlike F1's soft cap, ours is a hard step).
 
 Reminder pause (`/queuepause on|off`, staff): while paused, the t2h/t30 phases
 are marked fired WITHOUT posting (no burst on resume) and the LIVE phase still
-posts + unlocks but drops the @Queue Ping mention. The 02:00 lock is untouched.
+posts + unlocks but drops ALL role pings. The 04:00 lock is untouched.
 State persists in queue_state.json (`reminders_paused`), survives restarts.
 
 NeatQueue does NOT expose a "current queue size" read endpoint (verified:
@@ -51,17 +51,18 @@ logger = logging.getLogger("CQ_Bot.queue")
 WINDOWS = [
     {"key": "et", "tz": ZoneInfo("America/New_York"), "hour": 19, "minute": 0, "label": "ET"},
 ]
-# The window stays open this long once opened (19:00 -> 02:00 next day).
-WINDOW_HOURS = 7
+# The window stays open this long once opened (19:00 -> 04:00 next day).
+WINDOW_HOURS = 9
 
 # (phase_key, minutes_offset_from_open). Negative = before open (reminders);
 # 0 = open (LIVE message + unlock); positive = after open (lock candidate).
 # Order = chronological for a given anchor date.
+# t2h (17:00 heads-up) was removed 2026-09-10 — the community wanted exactly
+# two touchpoints per day: 18:30 (Queue Ping) and 19:00 (LIVE).
 PHASES = [
-    ("t2h", -120),     # 17:00 ET: heads-up reminder
-    ("t30", -30),      # 18:30 ET: final reminder + ping
-    ("live", 0),       # 19:00 ET: LIVE message + ping + NeatQueue UNLOCK
-    ("lock", WINDOW_HOURS * 60),  # 02:00 ET next day: NeatQueue LOCK
+    ("t30", -30),      # 18:30 ET: final reminder + Queue Ping
+    ("live", 0),       # 19:00 ET: LIVE message + ping (+ NA ping if RSVP hot) + NeatQueue UNLOCK
+    ("lock", WINDOW_HOURS * 60),  # 04:00 ET next day: NeatQueue LOCK
 ]
 
 PLAYERS_PER_LOBBY = 10  # CoD 5v5 hard step
@@ -114,7 +115,7 @@ def _fire_key(window_key, phase_key, date_str):
 def _window_anchor_utc(window, local_day_offset=0):
     """For the local date `today + local_day_offset` in the window's tz, return
     (date_str_in_tz, open_dt_utc). local_day_offset=-1 looks at YESTERDAY's
-    anchor — required because the 02:00 lock (anchor + 7h) lands on the next
+    anchor — required because the 04:00 lock (anchor + 9h) lands on the next
     calendar day in ET.
 
     Computed fresh each loop tick from datetime.now(timezone.utc) so DST is correct.
@@ -204,10 +205,11 @@ def _window_times_line(now_utc):
     return " · ".join(parts)
 
 
-async def build_reminder_embed(bot, phase_key, date_str, state):
+async def build_reminder_embed(bot, phase_key, date_str, state, na_ping=False):
     """Construct the UNIFIED embed for a phase. Reads the shared RSVP roster.
 
-    Shows the single window's open/close times and the shared roster."""
+    Shows the single window's open/close times and the shared roster.
+    na_ping=True adds the 'NA squad rallied' line (LIVE + hot roster only)."""
     rsvp_ids = _rsvp_list(state, date_str)
 
     def member_lookup(uid):
@@ -235,6 +237,11 @@ async def build_reminder_embed(bot, phase_key, date_str, state):
 
     embed = discord.Embed(title=title, description=desc, color=color)
     embed.add_field(name="🎟️ RSVP", value=_rsvp_field_value(rsvp_ids, member_lookup), inline=False)
+    if na_ping:
+        embed.add_field(
+            name="🇺🇸 NA squad rallied",
+            value=f"Lobby is filling — {len(rsvp_ids)} reserved. NA players, get in!",
+            inline=False)
 
     embed.add_field(
         name="🌍 Today's window",
@@ -400,6 +407,16 @@ class Queue(commands.Cog):
                 return role.mention
         return None
 
+    def _na_ping_mention(self):
+        """NA/LATAM role mention for the LIVE 'lobby is filling' rally (or None)."""
+        rid = getattr(core, 'QUEUE_NA_PING_ROLE_ID', 0)
+        guild = self.bot.get_guild(int(core.GUILD_ID)) if core.GUILD_ID else None
+        if guild and rid:
+            role = guild.get_role(rid)
+            if role:
+                return role.mention
+        return None
+
     # ---------- the scheduler ----------
 
     @tasks.loop(minutes=1)
@@ -407,7 +424,7 @@ class Queue(commands.Cog):
         """Each minute, check if any (anchor-day, phase) boundary was crossed now.
 
         The session is anchored to its OPEN date (19:00 ET). Because the window
-        crosses midnight (lock at 02:00 ET = anchor + 7h), a phase can be due
+        crosses midnight (lock at 04:00 ET = anchor + 9h), a phase can be due
         from EITHER today's or yesterday's anchor — both are checked. The lock
         fires when the window for its anchor day ends; with a single window
         there is no union skip anymore (manual-open protection still applies)."""
@@ -462,32 +479,6 @@ class Queue(commands.Cog):
                             state["fired"].append(fkey)
                             dirty = True
                             continue
-                        if phase_key == "live" and state.get("reminders_paused"):
-                            # Same semantics as the normal LIVE path, minus the ping.
-                            if state.get("manual_open"):
-                                logger.info("New scheduled session starting — clearing manual_open flag.")
-                                state["manual_open"] = False
-                                state.pop("manual_open_since", None)
-                                dirty = True
-                            try:
-                                msg_ok = await self._send_reminder(
-                                    phase_key, state, date_str, suppress_ping=True)
-                            except Exception as e:
-                                logger.error("Paused-LIVE post failed: %s", e)
-                                msg_ok = False
-                            unlock_ok = await self._call_lock(locked=False, window_key=window["key"])
-                            if msg_ok and unlock_ok:
-                                state["fired"].append(fkey)
-                                dirty = True
-                                try:
-                                    await self._dm_rsvp_roster(state, date_str)
-                                except Exception as e:
-                                    logger.error("RSVP DM step failed (non-fatal): %s", e)
-                            # On partial failure the phase is NOT marked fired, so the
-                            # whole tick retries next minute (a duplicate LIVE post is
-                            # acceptable; a locked queue is not).
-                            continue
-
                         # Clear manual_open when a new scheduled session starts, so a
                         # manual open from yesterday doesn't suppress today's auto-lock.
                         if phase_key == "live" and state.get("manual_open"):
@@ -521,7 +512,11 @@ class Queue(commands.Cog):
         if phase_key == "live":
             # OPEN = post the LIVE message AND unlock the queue in the same tick,
             # so the "queue is open" announcement is never ahead of the actual unlock.
-            msg_ok = await self._send_reminder(phase_key, state, date_str)
+            # While reminders are paused, the LIVE post still goes out but WITHOUT
+            # any role ping (suppress_ping also disables the conditional NA rally).
+            msg_ok = await self._send_reminder(
+                phase_key, state, date_str,
+                suppress_ping=bool(state.get("reminders_paused")))
             unlock_ok = await self._call_lock(locked=False, window_key=window["key"])
             # After the queue is actually open, DM the RSVP roster so reserved
             # players get a head start. Never let a DM failure block the LIVE phase.
@@ -559,11 +554,18 @@ class Queue(commands.Cog):
             logger.warning("Queue reminder: no channel configured to post in.")
             return False
         try:
-            embed = await build_reminder_embed(self.bot, phase_key, date_str, state)
+            rsvp_count = len(_rsvp_list(state, date_str))
+            na_hot = (phase_key == "live" and not suppress_ping
+                      and rsvp_count >= core.QUEUE_NA_PING_THRESHOLD)
+            embed = await build_reminder_embed(self.bot, phase_key, date_str, state,
+                                               na_ping=na_hot)
             content = None
             ping = self._queue_ping_mention()
             if phase_key in ("t30", "live") and ping and not suppress_ping:
                 content = ping
+                na = self._na_ping_mention() if na_hot else None
+                if na and na not in content:
+                    content += f" {na}"
             # LIVE phase: no RSVP buttons (it's action time — go to the join channel).
             view = None if phase_key == "live" else RsvpView()
             await channel.send(content=content, embed=embed, view=view,
@@ -631,7 +633,7 @@ class Queue(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         try:
             # Use the NA window's "today" as the date anchor (arbitrary; roster is shared).
-            date_str, _ = _window_date_and_open_utc(WINDOWS[0])
+            date_str, _ = _window_anchor_utc(WINDOWS[0])
             state = await asyncio.to_thread(_load_state)
             embed = await build_reminder_embed(self.bot, "t2h", date_str, state)
             channel = self._reminder_channel() or interaction.channel
@@ -645,7 +647,7 @@ class Queue(commands.Cog):
     # ---------- reminder pause toggle ----------
 
     @app_commands.command(name="queuepause",
-                          description="Pause/resume the T-2h and T-30min queue reminders (staff only).")
+                          description="Pause/resume the T-30min queue reminder (staff only).")
     @app_commands.describe(state="on = pause reminders, off = resume them")
     @app_commands.choices(state=[
         app_commands.Choice(name="on — pause reminders", value="on"),
@@ -667,10 +669,10 @@ class Queue(commands.Cog):
             return
         # Ephemeral confirmation for the staffer + a persistent audit line in staff logs.
         await interaction.response.send_message(
-            ("⏸️ Queue reminders **paused** — T-2h / T-30min posts are suppressed. "
-             "The 19:00 LIVE post, queue unlock and 02:00 lock still run.")
+            ("⏸️ Queue reminders **paused** — the 18:30 reminder post is suppressed. "
+             "The 19:00 LIVE post, queue unlock and 04:00 lock still run.")
             if pause else
-            ("▶️ Queue reminders **resumed** — T-2h / T-30min posts are back on."),
+            ("▶️ Queue reminders **resumed** — the 18:30 reminder post is back on."),
             ephemeral=True)
         try:
             log_ch = self.bot.get_channel(core.STAFF_LOGS_CHANNEL_ID)

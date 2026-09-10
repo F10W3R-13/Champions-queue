@@ -642,17 +642,16 @@ _core2.nq_add_mmr = _orig_decay_add
 _core2.nq_recent_match_count = _orig_recent
 _core2.DECAY_DRYRUN = os.getenv("DECAY_DRYRUN", "1") == "1"
 
-# ---- Test I: /queuepause — t2h/t30 suppressed, LIVE posts w/o ping + unlocks ----
+# ---- Test I: /queuepause + conditional NA ping ----
 # Drives the REAL reminder_loop with a fake channel/clock against a temp state file.
+# Schedule (2026-09-10): phases are t30 (18:30 ET) and live (19:00 ET) only —
+# t2h was removed. Window is 19:00->04:00 ET (9h).
 import json as _json2, tempfile as _tf2, types as _types2
 from cogs import queue as _q
 
 _tfdir = _tf2.mkdtemp()
 _q_state = os.path.join(_tfdir, "queue_state.json")
 _q.core.QUEUE_STATE_FILE = _q_state
-# _load_state closes over core's module globals at call time, but our first
-# loop tick reads BEFORE anything exists — seed an empty state file so the
-# readback works.
 _json2.dump({"rsvp": {}, "fired": []}, open(_q_state, "w"))
 
 _sent = []           # (content, embed_title, view_present)
@@ -670,47 +669,70 @@ _qcog = _q.Queue.__new__(_q.Queue)
 _qcog.bot = _FakeQBot()
 _qcog._reminder_channel = lambda: _FakeCh2()
 _qcog._queue_ping_mention = lambda: "<@&PINGROLE>"
+_qcog._na_ping_mention = lambda: "<@&NAROLE>"
 async def _fake_call_lock(locked, window_key):
     (_unlock_calls if not locked else _lock_calls).append(window_key)
     return True
 _qcog._call_lock = _fake_call_lock
 
-# Freeze the clock INSIDE the module to a t2h boundary, then a LIVE boundary.
 _now = {"v": None}
 _real_dt = _dt
 _q.datetime = _types2.SimpleNamespace(
     now=lambda tz=None: _now["v"], timezone=_real_dt.timezone, timedelta=_real_dt.timedelta)
 
 def _run_loop_once():
-    # tasks.loop wraps the coroutine; call the underlying fn directly.
     _run(_q.Queue.reminder_loop.coro(_qcog))
 
-# --- t2h boundary, NOT paused: posts normally with the RSVP view ---
 _day = "2026-09-10"
-_now["v"] = _real_dt.datetime(2026, 9, 10, 21, 0, tzinfo=_real_dt.timezone.utc)  # 17:00 ET (t2h)
+ET_OFFSET = _real_dt.timedelta(hours=-4)  # EDT
+
+# --- t30 boundary (18:30 ET): posts WITH Queue Ping, no NA ping ---
+_now["v"] = _real_dt.datetime(2026, 9, 10, 22, 30, tzinfo=_real_dt.timezone.utc)
 _run_loop_once()
-assert len(_sent) == 1 and _sent[0][1] == "📣 Queue — 2 hours" and _sent[0][2], \
-    f"unpaused t2h must post the RSVP panel, got {_sent}"
+assert len(_sent) == 1 and _sent[0][1] == "⏰ Queue — 30 min", f"t30 must post, got {_sent}"
+assert _sent[0][0] == "<@&PINGROLE>", f"t30 content must ping Queue Ping only, got {_sent[0][0]!r}"
+
+# --- live boundary with COLD RSVP (2 < 5): Queue Ping only, no NA ping ---
+_now["v"] = _real_dt.datetime(2026, 9, 10, 23, 0, tzinfo=_real_dt.timezone.utc)
+_run_loop_once()
+assert len(_sent) == 2 and _sent[1][1] == "🔴 LIVE — Queue Open", f"live must post, got {_sent}"
+assert _sent[1][0] == "<@&PINGROLE>", f"cold live must ping Queue Ping only, got {_sent[1][0]!r}"
+assert _unlock_calls, "live must unlock the queue"
+
+# --- live boundary with HOT RSVP (6 >= 5): Queue Ping + NA ping, NA field in embed ---
 _st = _json2.load(open(_q_state))
-_st["reminders_paused"] = True
-# rewind the fired marker to simulate the boundary arriving again
-_st["fired"] = [k for k in _st["fired"] if not k.endswith("t2h_" + _day)]
+_st["fired"] = [k for k in _st["fired"] if not k.endswith("live_" + _day)]
+_st["rsvp"][_day] = ["1", "2", "3", "4", "5", "6"]   # 6 reserved >= threshold 5
 _json2.dump(_st, open(_q_state, "w"))
 _run_loop_once()
-_st = _json2.load(open(_q_state))
-assert len(_sent) == 1, f"t2h must be silently skipped while paused, got {_sent}"
-assert any(k.endswith(f"t2h_{_day}") for k in _st["fired"]), "t2h must be marked fired while paused"
+assert len(_sent) == 3, f"hot live must post again, got {_sent}"
+assert _sent[2][0] == "<@&PINGROLE> <@&NAROLE>", f"hot live must add NA ping, got {_sent[2][0]!r}"
 
-# --- LIVE boundary while paused: post WITHOUT ping, unlock still called ---
-_now["v"] = _real_dt.datetime(2026, 9, 10, 23, 0, tzinfo=_real_dt.timezone.utc)  # 19:00 ET (live)
-_run_loop_once()
+# --- paused live: post WITHOUT any ping, still unlocks ---
 _st = _json2.load(open(_q_state))
-assert len(_sent) == 2 and _sent[1][1] == "🔴 LIVE — Queue Open",     f"paused LIVE must still post once, got {_sent}"
-_content, _title, _view = _sent[1]
-assert _title == "🔴 LIVE — Queue Open", _title
-assert _content is None, f"paused LIVE must drop the @Queue Ping, got {_content!r}"
-assert _unlock_calls, "paused LIVE must still unlock the queue"
-assert any(k.endswith(f"live_{_day}") for k in _st["fired"]), "live must be marked fired"
-print("Queue pause test I OK: t2h skipped silently, LIVE posted w/o ping + unlocked")
+_st["fired"] = [k for k in _st["fired"] if not k.endswith("live_" + _day)]
+_st["reminders_paused"] = True
+_json2.dump(_st, open(_q_state, "w"))
+_run_loop_once()
+assert len(_sent) == 4 and _sent[3][1] == "🔴 LIVE — Queue Open", f"paused live must post, got {_sent}"
+assert _sent[3][0] is None, f"paused live must drop ALL pings, got {_sent[3][0]!r}"
+assert len(_unlock_calls) == 3, f"paused live must still unlock, calls={_unlock_calls}"
+_st = _json2.load(open(_q_state))
+assert any(k.endswith("live_" + _day) for k in _st["fired"]), "paused live must be marked fired"
+print("Queue pause + NA ping test I OK: t30 pings, cold live pings, hot live adds NA, paused live silent-unlocks")
+
+# --- window length: old 02:00 ET lock time must NOT fire; new 04:00 ET must ---
+# 02:00 ET = 06:00 UTC (the OLD lock time), 04:00 ET = 08:00 UTC (the NEW one).
+_st = _json2.load(open(_q_state))
+_st["fired"] = [k for k in _st["fired"] if not k.endswith("lock_" + _day)]
+_json2.dump(_st, open(_q_state, "w"))
+_lock_calls.clear()
+_now["v"] = _real_dt.datetime(2026, 9, 11, 6, 0, tzinfo=_real_dt.timezone.utc)   # 02:00 ET
+_run_loop_once()
+assert not _lock_calls, "02:00 ET must NOT lock (window now 9h)"
+_now["v"] = _real_dt.datetime(2026, 9, 11, 8, 0, tzinfo=_real_dt.timezone.utc)   # 04:00 ET
+_run_loop_once()
+assert _lock_calls, "04:00 ET must lock"
+print("9h window test I2 OK: lock fires at 04:00 ET, not 02:00")
 
 print("\nALL SMOKE TESTS PASSED")
