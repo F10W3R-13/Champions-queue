@@ -33,14 +33,14 @@
 - **NeatQueue "User not found"**: 영구 에러 → `⏭ not in NQ`로 graceful skip
 
 ## 5. 큐 리마인더 & 잠금 자동화
-- **reminder_loop** (매분): NA 23:00 ET / EU 23:00 CET 윈도우 감시
-- **Phases**: T-2h (준비) → T-30min (Queue Ping) → LIVE (메시지 + unlock + RSVP DM) → lock (+3h)
-- **RSVP 패널**: 공유 명단 (NA/EU 분리 없음), Join/Leave/Refresh 버튼, "X reserved — Y more to fill next 5v5 lobby"
+- **reminder_loop** (매분): **S2 단일 창구 19:00–02:00 ET** (자정 넘김 — 앵커는 개장일, 스케줄러는 오늘/어제 앵커 이중 검사)
+- **Phases**: T-2h 17:00 ET (준비) → T-30min 18:30 ET (Queue Ping) → LIVE 19:00 ET (메시지 + unlock + RSVP DM) → lock 02:00 ET (+7h)
+- **RSVP 패널**: 날짜 키 공유 명단, Join/Leave/Refresh 버튼, "X reserved — Y more to fill next 5v5 lobby"
 - **LIVE DM**: RSVP 명단에게 "지금 들어가!" 디엠 (unlock 완료 후)
 - **잠금 동기화**: LIVE 메시지와 NeatQueue unlock을 같은 tick에
-- **union 로직**: 어느 윈도우든 열려 있으면 lock 스킵
+- **리마인더 정지 `/queuepause on|off`** (2026-09-10): 정지 중 t2h/t30 게시 스킵(fired 마킹 — 재개 시 몰아치기 없음), LIVE는 @Queue Ping 없이 게시+언락 유지, 02:00 lock 무관. `queue_state.json`의 `reminders_paused`로 영속(재시작 생존)
 - **수동 /unlock 보호**: `on_interaction`으로 감지, `manual_open` 플래그로 자동 lock 스킵 (24h 안전장치)
-- **KST 미표기**: 서버가 EN/ES 기반이므로 각 윈도우 현지 시간만 표시
+- **KST 미표기**: 서버가 EN/ES 기반이므로 윈도우 현지 시간만 표시
 
 ## 6. 자가역할 & 팀
 - `/rolepanel`: region/weapon/team 셀렉터 (persistent View)

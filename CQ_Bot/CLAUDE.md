@@ -3,7 +3,7 @@
 > **단일 진실 원천 (Single Source of Truth).** 이 파일이 프로젝트의 기준점이다.
 > 다른 문서(IMPROVEMENT_PLAN.md, COMMANDS_GUIDE.md, DEPLOY_GUIDE 등)는 각각 특정 용도(roadmap, 사용자용 복붙, 배포)만 담당하며, 여기와 중복되는 내용이 충돌하면 **이 파일이 우선**이다.
 >
-> **Last updated: 2026-09-09**
+> **Last updated: 2026-09-10**
 
 ---
 
@@ -185,6 +185,7 @@ Champion's Queue/                         # repo root
 | `/clearteam [member]` | 팀 제거 (역할+Airtable+닉네임 태그) |
 | `/verifypanel` | 인증 패널 게시 |
 | `/queuepanel` | RSVP 패널 수동 게시 (테스트용) |
+| `/queuepause [on\|off]` | T-2h/T-30min 리마인더 일시정지/재개 (정지 중 LIVE는 핑 없이 게시+언락 유지) |
 | `/ignhelp` | IGN 등록 가이드 패널 게시 |
 | `/decaystatus [member]` | 플레이어 MMR/휴면일/부식 상태 조회 |
 | `/decayrun` | 일일 부식 & 자격 스윕 즉시 실행 |
@@ -199,7 +200,7 @@ Champion's Queue/                         # repo root
 - **6.2 통계 & 시즌**: `/stats`(DM)·`/leaderboard`(**지표 5종으로 축소 — 2026-09: K/D, Impact, Games, OBJ(HP), ADR(SND). 고급 지표는 /seasonreport·주간 포스트로 이동**), 시즌/주간 리포트 + 월요일 12:00 UTC 루프(**주간 3섹션: ZCS·DPD·Assist%(SND)**), Advanced 지표(DPD/DPK/ZCS/Assist %)는 /stats 카드에 유지
 - **6.3 OCR 수집**: #results 이미지 2장 → GPT-4.1 vision → Airtable, 45초 reconcile 루프, 3-stage matcher, `/review`·`/link`·`/unlink`·`/reject`
 - **6.4 MMR modifier**: 10분 루프, impact 공식 `round((impact-130)/70*10)` ±10, 시간창 `[mtime-2h,+4h]` + 참가자 필터/시리즈 클러스터링, 3중 이중적용 방어, backfill, 공개 미러
-- **6.5 큐 리마인더 & 잠금**: 매분 루프, **S2 단일 창구 19:00–02:00 ET (자정 넘김 — 앵커는 개장일, 스케줄러는 오늘/어제 앵커 이중 검사)**, T-2h(17:00)→T-30min(18:30)→LIVE(19:00)→+7h 잠금(02:00), RSVP 패널+LIVE DM, manual-open 보호(24h)
+- **6.5 큐 리마인더 & 잠금**: 매분 루프, **S2 단일 창구 19:00–02:00 ET (자정 넘김 — 앵커는 개장일, 스케줄러는 오늘/어제 앵커 이중 검사)**, T-2h(17:00)→T-30min(18:30)→LIVE(19:00)→+7h 잠금(02:00), RSVP 패널+LIVE DM, manual-open 보호(24h), **`/queuepause on|off` 리마인더 정지 (2026-09-10: 매일 전체 핑 피로도 대응 — t2h/t30 게시 스킵, LIVE는 @Queue Ping 없이 게시+언락 유지, `queue_state.json`의 `reminders_paused`로 영속)**
 - **6.6 자가역할 & 팀**: `/rolepanel`, `/clearteam`(역할+Airtable+닉네임 태그), `on_member_update` 태그 정리. **Weapon 셀렉터는 채택률 84%(137/163명, 2026-09-09 Discord 조사)로 KEEP 확정** — 통계에 안 쓰여도 소셜 표식으로 기능 중. 단순 "미사용=제거" 가설은 데이터로 기각된 사례
 - **6.7 휴면 부식 & 800 게이트**: Champs 정상(7일 grace, −10/−20) vs 비-Champs 관대(21일, −5/−10), floor 700, dead-day 전원 면제+동적 grace, **재가동 사면(`DECAY_EPOCH` — idle을 max(마지막 매치, epoch)부터 계산, 첫 스윕에 자동 핀)**, 800 미만 Champs만 Registered 박탈/자동 복구(**`DECAY_GATE_ENABLED=0`으로 중단 가능** — 박탈되면 매치로 회복할 수 없는 교착 구조), placement 5경기 면제, escalate_after에도 dead-days 연장 적용
 
@@ -238,7 +239,7 @@ python _smoke_test.py                             # 전체 회귀 테스트
 ### 상태 파일 (서버에만 존재, gitignored)
 - `mmr_state.json` — `processed` / `backfilled` / `applied` 셋
 - `decay_state.json` — `decay_applied` (하루 1회 부식 멱등) / `below_threshold` (Champs 현재 박탈 집합, 역할 토글 diff) / `dead_days` (누적 큐 비활성일, 동적 grace 연장)
-- `queue_state.json` — RSVP 명단 / `fired` 키 / `manual_open` / `live_dmed`
+- `queue_state.json` — RSVP 명단 / `fired` 키 / `manual_open` / `live_dmed` / `reminders_paused` (/queuepause 토글)
 
 ---
 

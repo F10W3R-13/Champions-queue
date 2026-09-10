@@ -642,4 +642,75 @@ _core2.nq_add_mmr = _orig_decay_add
 _core2.nq_recent_match_count = _orig_recent
 _core2.DECAY_DRYRUN = os.getenv("DECAY_DRYRUN", "1") == "1"
 
+# ---- Test I: /queuepause — t2h/t30 suppressed, LIVE posts w/o ping + unlocks ----
+# Drives the REAL reminder_loop with a fake channel/clock against a temp state file.
+import json as _json2, tempfile as _tf2, types as _types2
+from cogs import queue as _q
+
+_tfdir = _tf2.mkdtemp()
+_q_state = os.path.join(_tfdir, "queue_state.json")
+_q.core.QUEUE_STATE_FILE = _q_state
+# _load_state closes over core's module globals at call time, but our first
+# loop tick reads BEFORE anything exists — seed an empty state file so the
+# readback works.
+_json2.dump({"rsvp": {}, "fired": []}, open(_q_state, "w"))
+
+_sent = []           # (content, embed_title, view_present)
+_unlock_calls = []
+_lock_calls = []
+class _FakeCh2:
+    mention = "#queue"
+    async def send(self, content=None, embed=None, view=None, **k):
+        _sent.append((content, embed.title if embed else None, view is not None))
+class _FakeQBot:
+    def get_channel(self, cid): return _FakeCh2() if cid else None
+    def get_guild(self, gid): return None
+
+_qcog = _q.Queue.__new__(_q.Queue)
+_qcog.bot = _FakeQBot()
+_qcog._reminder_channel = lambda: _FakeCh2()
+_qcog._queue_ping_mention = lambda: "<@&PINGROLE>"
+async def _fake_call_lock(locked, window_key):
+    (_unlock_calls if not locked else _lock_calls).append(window_key)
+    return True
+_qcog._call_lock = _fake_call_lock
+
+# Freeze the clock INSIDE the module to a t2h boundary, then a LIVE boundary.
+_now = {"v": None}
+_real_dt = _dt
+_q.datetime = _types2.SimpleNamespace(
+    now=lambda tz=None: _now["v"], timezone=_real_dt.timezone, timedelta=_real_dt.timedelta)
+
+def _run_loop_once():
+    # tasks.loop wraps the coroutine; call the underlying fn directly.
+    _run(_q.Queue.reminder_loop.coro(_qcog))
+
+# --- t2h boundary, NOT paused: posts normally with the RSVP view ---
+_day = "2026-09-10"
+_now["v"] = _real_dt.datetime(2026, 9, 10, 21, 0, tzinfo=_real_dt.timezone.utc)  # 17:00 ET (t2h)
+_run_loop_once()
+assert len(_sent) == 1 and _sent[0][1] == "📣 Queue — 2 hours" and _sent[0][2], \
+    f"unpaused t2h must post the RSVP panel, got {_sent}"
+_st = _json2.load(open(_q_state))
+_st["reminders_paused"] = True
+# rewind the fired marker to simulate the boundary arriving again
+_st["fired"] = [k for k in _st["fired"] if not k.endswith("t2h_" + _day)]
+_json2.dump(_st, open(_q_state, "w"))
+_run_loop_once()
+_st = _json2.load(open(_q_state))
+assert len(_sent) == 1, f"t2h must be silently skipped while paused, got {_sent}"
+assert any(k.endswith(f"t2h_{_day}") for k in _st["fired"]), "t2h must be marked fired while paused"
+
+# --- LIVE boundary while paused: post WITHOUT ping, unlock still called ---
+_now["v"] = _real_dt.datetime(2026, 9, 10, 23, 0, tzinfo=_real_dt.timezone.utc)  # 19:00 ET (live)
+_run_loop_once()
+_st = _json2.load(open(_q_state))
+assert len(_sent) == 2 and _sent[1][1] == "🔴 LIVE — Queue Open",     f"paused LIVE must still post once, got {_sent}"
+_content, _title, _view = _sent[1]
+assert _title == "🔴 LIVE — Queue Open", _title
+assert _content is None, f"paused LIVE must drop the @Queue Ping, got {_content!r}"
+assert _unlock_calls, "paused LIVE must still unlock the queue"
+assert any(k.endswith(f"live_{_day}") for k in _st["fired"]), "live must be marked fired"
+print("Queue pause test I OK: t2h skipped silently, LIVE posted w/o ping + unlocked")
+
 print("\nALL SMOKE TESTS PASSED")

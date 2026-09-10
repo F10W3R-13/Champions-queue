@@ -20,6 +20,11 @@ via NeatQueue's interactive panel. The count is shown as
 "X reserved · Y to fill the next 10-player lobby", emphasizing the CoD 5v5 /
 multiple-of-10 cliff (unlike F1's soft cap, ours is a hard step).
 
+Reminder pause (`/queuepause on|off`, staff): while paused, the t2h/t30 phases
+are marked fired WITHOUT posting (no burst on resume) and the LIVE phase still
+posts + unlocks but drops the @Queue Ping mention. The 02:00 lock is untouched.
+State persists in queue_state.json (`reminders_paused`), survives restarts.
+
 NeatQueue does NOT expose a "current queue size" read endpoint (verified:
 9 candidate GETs all 404), so RSVP is the sole count source. No external coupling.
 
@@ -447,6 +452,42 @@ class Queue(commands.Cog):
                                 dirty = True
                                 continue
 
+                        # REMINDER PAUSE: t2h/t30 channel posts are suppressed while
+                        # paused (marked fired so they don't burst-post on resume).
+                        # The LIVE phase still runs — it owns the queue unlock — but
+                        # its role ping is dropped so paused mode = zero @Queue Ping.
+                        if phase_key in ("t2h", "t30") and state.get("reminders_paused"):
+                            logger.info("Phase %s for %s skipped — reminders paused.",
+                                        phase_key, date_str)
+                            state["fired"].append(fkey)
+                            dirty = True
+                            continue
+                        if phase_key == "live" and state.get("reminders_paused"):
+                            # Same semantics as the normal LIVE path, minus the ping.
+                            if state.get("manual_open"):
+                                logger.info("New scheduled session starting — clearing manual_open flag.")
+                                state["manual_open"] = False
+                                state.pop("manual_open_since", None)
+                                dirty = True
+                            try:
+                                msg_ok = await self._send_reminder(
+                                    phase_key, state, date_str, suppress_ping=True)
+                            except Exception as e:
+                                logger.error("Paused-LIVE post failed: %s", e)
+                                msg_ok = False
+                            unlock_ok = await self._call_lock(locked=False, window_key=window["key"])
+                            if msg_ok and unlock_ok:
+                                state["fired"].append(fkey)
+                                dirty = True
+                                try:
+                                    await self._dm_rsvp_roster(state, date_str)
+                                except Exception as e:
+                                    logger.error("RSVP DM step failed (non-fatal): %s", e)
+                            # On partial failure the phase is NOT marked fired, so the
+                            # whole tick retries next minute (a duplicate LIVE post is
+                            # acceptable; a locked queue is not).
+                            continue
+
                         # Clear manual_open when a new scheduled session starts, so a
                         # manual open from yesterday doesn't suppress today's auto-lock.
                         if phase_key == "live" and state.get("manual_open"):
@@ -508,8 +549,11 @@ class Queue(commands.Cog):
             logger.error("NeatQueue %s failed (%s window): %s", action, window_key, e)
             return False
 
-    async def _send_reminder(self, phase_key, state, date_str):
-        """Post the unified reminder embed for t2h/t30/live. Returns True on success."""
+    async def _send_reminder(self, phase_key, state, date_str, suppress_ping=False):
+        """Post the unified reminder embed for t2h/t30/live. Returns True on success.
+
+        suppress_ping drops the @Queue Ping role mention (used when reminders
+        are paused but the LIVE post must still go out with the unlock)."""
         channel = self._reminder_channel()
         if channel is None:
             logger.warning("Queue reminder: no channel configured to post in.")
@@ -518,7 +562,7 @@ class Queue(commands.Cog):
             embed = await build_reminder_embed(self.bot, phase_key, date_str, state)
             content = None
             ping = self._queue_ping_mention()
-            if phase_key in ("t30", "live") and ping:
+            if phase_key in ("t30", "live") and ping and not suppress_ping:
                 content = ping
             # LIVE phase: no RSVP buttons (it's action time — go to the join channel).
             view = None if phase_key == "live" else RsvpView()
@@ -598,8 +642,49 @@ class Queue(commands.Cog):
             logger.error("Error in /queuepanel: %s", e, exc_info=True)
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
+    # ---------- reminder pause toggle ----------
+
+    @app_commands.command(name="queuepause",
+                          description="Pause/resume the T-2h and T-30min queue reminders (staff only).")
+    @app_commands.describe(state="on = pause reminders, off = resume them")
+    @app_commands.choices(state=[
+        app_commands.Choice(name="on — pause reminders", value="on"),
+        app_commands.Choice(name="off — resume reminders", value="off"),
+    ])
+    async def queue_pause(self, interaction: discord.Interaction,
+                          state: app_commands.Choice[str]):
+        if not core.is_staff(interaction):
+            await interaction.response.send_message("❌ This command is restricted to Staff.", ephemeral=True)
+            return
+        pause = state.value == "on"
+        try:
+            disk = await asyncio.to_thread(_load_state)
+            disk["reminders_paused"] = pause
+            await asyncio.to_thread(_save_state, disk)
+        except Exception as e:
+            logger.error("Error writing reminders_paused: %s", e, exc_info=True)
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+            return
+        # Ephemeral confirmation for the staffer + a persistent audit line in staff logs.
+        await interaction.response.send_message(
+            ("⏸️ Queue reminders **paused** — T-2h / T-30min posts are suppressed. "
+             "The 19:00 LIVE post, queue unlock and 02:00 lock still run.")
+            if pause else
+            ("▶️ Queue reminders **resumed** — T-2h / T-30min posts are back on."),
+            ephemeral=True)
+        try:
+            log_ch = self.bot.get_channel(core.STAFF_LOGS_CHANNEL_ID)
+            if log_ch:
+                await log_ch.send(
+                    f"{'⏸️' if pause else '▶️'} Queue reminders "
+                    f"{'paused' if pause else 'resumed'} by {interaction.user.mention}.")
+        except Exception as e:
+            logger.warning("Could not post pause audit line: %s", e)
+
+
 
 async def setup(bot):
     # Register the persistent RSVP view so buttons survive restarts (verify.py pattern).
     bot.add_view(RsvpView())
     await bot.add_cog(Queue(bot))
+

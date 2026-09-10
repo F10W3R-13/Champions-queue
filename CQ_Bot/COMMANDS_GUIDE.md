@@ -70,6 +70,8 @@ The bot posts to the staff log channel automatically when:
 
 > `/queuepanel` — Post the RSVP queue panel manually (normally auto-fired 2h before each session window). Use for testing.
 
+> `/queuepause [on|off]` — Pause or resume the T-2h / T-30min queue reminders. While paused, the 19:00 LIVE post still goes out (without the @Queue Ping) and the queue still unlocks/locks on schedule — only the two reminder posts are suppressed. State persists across restarts.
+
 > `/ignhelp` — Post the IGN registration guide panel in the current channel. Pin it in #ign so blocked players can find help.
 
 > `/clearteam` — Strip a player's team membership completely: removes the Champs role, clears their Airtable Team field, and removes the [TAG] prefix from their nickname. Use when someone falsely claimed a team.
