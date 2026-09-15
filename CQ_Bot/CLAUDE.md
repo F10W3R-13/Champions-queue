@@ -3,7 +3,7 @@
 > **단일 진실 원천 (Single Source of Truth).** 이 파일이 프로젝트의 기준점이다.
 > 다른 문서(IMPROVEMENT_PLAN.md, COMMANDS_GUIDE.md, DEPLOY_GUIDE 등)는 각각 특정 용도(roadmap, 사용자용 복붙, 배포)만 담당하며, 여기와 중복되는 내용이 충돌하면 **이 파일이 우선**이다.
 >
-> **Last updated: 2026-09-10**
+> **Last updated: 2026-09-15**
 
 ---
 
@@ -37,7 +37,7 @@
 ### 데이터 흐름
 ```
 플레이어가 #results에 스크린샷 2장 업로드
-  → on_message 감지 → GPT-4.1 vision OCR → JSON 파싱
+  → on_message 감지 → OCR vision (LIVE: gpt-5.6-luna, `OCR_MODEL` env) → JSON 파싱
   → matcher (3-stage: exact → fuzzy → review)가 IGN → player record 연결
   → Airtable Records_HP / Records_SND에 행 생성
   → /stats, /leaderboard에서 집계 (rollup/formula 필드)
@@ -75,6 +75,7 @@ Champion's Queue/                         # repo root
     │   └── queue.py                 # reminder_loop (매분), RSVP 패널, lock/unlock, manual-open 보호, /queuepanel
     ├── _smoke_test.py                      # 오프라인 테스트 harness
     ├── _neatqueue_api_test.py              # NeatQueue API 탐색 스크립트 (수동 실행용)
+    ├── _ocr_model_test.py                  # OCR 모델 프롬브 (교체 전 파라미터 호환 검증, 수동 실행용)
     ├── Team list_EU.txt, Team list_NA.txt  # 팀 로스터 seed data
     └── docs:
         ├── CLAUDE.md                       # ← 이 파일 (진실 원천)
@@ -102,6 +103,11 @@ Champion's Queue/                         # repo root
 | `AIRTABLE_BASE_ID` | `appm2BhtqdgYGFCMH` | (쿼터 고갈 시 신규 워크스페이스 복제본으로 교체 가능 — `AIRTABLE_QUOTA_RUNBOOK.md` 참조. 테이블 ID도 `*_TABLE_ID` env로 덮어쓰기 가능) |
 | `OPENAI_API_KEY` | GPT-4.1 vision OCR용 |
 | `NEATQUEUE_TOKEN` | NeatQueue REST API (raw token, Bearer 없음) |
+
+### OCR 설정
+| 변수 | 기본값 | 용도 |
+|---|---|---|
+| `OCR_MODEL` | `gpt-4.1` | OCR vision 모델. **`.env`에 `gpt-5.6-luna` 설정됨 (2026-09-15 LIVE 전환)** — GPT-5.x는 `max_tokens`·`temperature`·`top_p` 미지원 → `run_ocr`이 `gpt-5` 접두사에서만 샘플링 파라미터 생략. 모델 교체 전 `python _ocr_model_test.py` 프롬브 필수 (PITFALLS #14) |
 
 ### 채널/역할 ID
 | 변수 | 기본값 | 용도 |
@@ -200,7 +206,7 @@ Champion's Queue/                         # repo root
 
 - **6.1 IGN 등록 & 인증**: `/ign` → Airtable+Registered 역할, `/link` 후 per-player MMR backfill, `/ignhelp` 패널, NeatQueue 거부 auto-helper
 - **6.2 통계 & 시즌**: `/stats`(DM)·`/leaderboard`(**지표 5종으로 축소 — 2026-09: K/D, Impact, Games, OBJ(HP), ADR(SND). 고급 지표는 /seasonreport·주간 포스트로 이동**), 시즌/주간 리포트 + 월요일 12:00 UTC 루프(**주간 3섹션: ZCS·DPD·Assist%(SND)**), Advanced 지표(DPD/DPK/ZCS/Assist %)는 /stats 카드에 유지
-- **6.3 OCR 수집**: #results 이미지 2장 → GPT-4.1 vision → Airtable, 45초 reconcile 루프, 3-stage matcher, `/review`·`/link`·`/unlink`·`/reject`
+- **6.3 OCR 수집**: #results 이미지 2장 → OCR vision (gpt-5.6-luna, `OCR_MODEL` env) → Airtable, 45초 reconcile 루프, 3-stage matcher, `/review`·`/link`·`/unlink`·`/reject`
 - **6.4 MMR modifier**: 10분 루프, impact 공식 `round((impact-130)/70*10)` ±10, 시간창 `[mtime-2h,+4h]` + 참가자 필터/시리즈 클러스터링, 3중 이중적용 방어, backfill, 공개 미러
 - **6.5 큐 리마인더 & 잠금**: 매분 루프, **단일 창구 19:00–04:00 ET (9시간, 자정 넘김 — 앵커는 개장일, 스케줄러는 오늘/어제 앵커 이중 검사)**, **T-30min(18:30, Queue Ping)→LIVE(19:00, Queue Ping + RSVP 5명 이상 시 NA/LATAM 핑)→+9h 잠금(04:00)** — t2h(17:00) 제거 (2026-09-10: 하루 터치포인트 2개로 축소), RSVP 패널+LIVE DM, manual-open 보호(24h), `/queuepause on|off` 리마인더 정지 (정지 중 LIVE는 전체 핑 없이 게시+언락, `queue_state.json`의 `reminders_paused`로 영속)
 - **6.6 자가역할 & 팀**: `/rolepanel`, `/clearteam`(역할+Airtable+닉네임 태그), `on_member_update` 태그 정리. **Weapon 셀렉터는 채택률 84%(137/163명, 2026-09-09 Discord 조사)로 KEEP 확정** — 통계에 안 쓰여도 소셜 표식으로 기능 중. 단순 "미사용=제거" 가설은 데이터로 기각된 사례
@@ -265,6 +271,7 @@ python _smoke_test.py                             # 전체 회귀 테스트
 14. **Airtable 월간 API 쿼터는 하드스톱** (Free 1,000/월, 매월 1일 리셋). 상시 폴링 루프(45초 reconcile 등)는 금지 — `RECONCILE_PERIOD_SECONDS`(기본 6h)와 429-billing 자동 백오프(`QUOTA_BACKOFF_SECONDS`) 준수. 쿼터 소진 시 봇의 모든 Airtable 읽기/쓰기가 그 달 내 실패함
 15. **재가동/롱기크 후 decay 절벽**: `dead_days`는 첫 매치 다음 날 리셋되지만 결장 이력은 남는다 — idle은 반드시 `DECAY_EPOCH` 기준으로 클램프되어야 함 (smoke test G/G2 참조)
 16. **부팅 경로에 Airtable 하드 의존 금지**: `core.py` import 시점의 `Matcher()` 콜드 로드가 429(쿼터 소진)로 죽으면 봇 전체가 exit 1 → Pterodactyl 크래시 루프. 2026-09-09 수정: 로드 실패 시 빈 `Matcher(eager=False)`로 폴백하고 reconcile 루프가 TTL 무시 재시도로 복구 (smoke test H). 새 모듈도 import 시점 API 호출 금지
+17. **OCR 모델 교체 시 GPT-5.x 파라미터 비호환**: `gpt-5.6-luna`는 `max_tokens`(→ `max_completion_tokens` 사용)와 `temperature`/`top_p` 비기본값(1만 허용)을 400으로 거절. `run_ocr`은 모델명 `gpt-5` 접두사에서만 샘플링 파라미터 생략. 모델 교체 전 `python _ocr_model_test.py` 프롬브 필수 (PITFALLS #14)
 
 ---
 

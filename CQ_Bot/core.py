@@ -382,13 +382,11 @@ def _extract_json(text):
 async def run_ocr(url1, url2):
     """Two scoreboards -> merged JSON via OpenAI vision. (async, non-blocking)"""
     prompt = build_prompt(matcher.roster)
-    resp = await openai_client.chat.completions.create(
-        model=OCR_MODEL,
-        temperature=0,
-        top_p=0,
-        max_tokens=2048,
-        response_format={"type": "json_object"},
-        messages=[{
+    params = {
+        "model": OCR_MODEL,
+        "max_completion_tokens": 2048,
+        "response_format": {"type": "json_object"},
+        "messages": [{
             "role": "user",
             "content": [
                 {"type": "text", "text": prompt},
@@ -396,7 +394,12 @@ async def run_ocr(url1, url2):
                 {"type": "image_url", "image_url": {"url": url2, "detail": "auto"}},
             ],
         }],
-    )
+    }
+    # GPT-5.x rejects non-default temperature/top_p (only 1 allowed); 4.1-lineage pins them for determinism.
+    if not OCR_MODEL.startswith("gpt-5"):
+        params["temperature"] = 0
+        params["top_p"] = 0
+    resp = await openai_client.chat.completions.create(**params)
     return _extract_json(resp.choices[0].message.content)
 
 

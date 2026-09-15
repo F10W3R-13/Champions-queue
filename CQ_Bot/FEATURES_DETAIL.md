@@ -15,7 +15,7 @@
 - Advanced 지표: DPD, DPK, ZCS, Assist % (HP Games ≥ 1일 때만 표시)
 
 ## 3. OCR 수집
-- `on_message`가 #results의 이미지 2장 감지 → GPT-4.1 vision OCR → JSON → Airtable
+- `on_message`가 #results의 이미지 2장 감지 → OCR vision (LIVE: `gpt-5.6-luna`, `OCR_MODEL` env — GPT-5.x 파라미터 분기는 PITFALLS #14) → JSON → Airtable
 - 45초 reconcile loop: unmatched 레코드 재매칭 (matcher TTL 5분)
 - matcher: 3-stage (exact → fuzzy auto → needs review)
 - `/review`, `/link`, `/unlink`, `/reject` 스태프 워크플로

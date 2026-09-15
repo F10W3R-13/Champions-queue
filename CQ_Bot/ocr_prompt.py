@@ -1,4 +1,4 @@
-# OCR vision prompt for GPT-4.1.
+# OCR vision prompt — tuned on GPT-4.1; LIVE model comes from OCR_MODEL env (gpt-5.6-luna).
 # {ROSTER_BLOCK} is replaced at runtime with the layer-1 roster hint.
 
 PROMPT_TEMPLATE = r"""[Role and task]
